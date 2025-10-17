@@ -17,17 +17,26 @@ struct VisualEditorView: View {
     private var dismiss
     @StateObject private var viewModel = VisualEditorViewModel()
 
+    private struct ExportShareItem: Identifiable {
+        let id = UUID()
+        let image: UIImage
+    }
+
     @Bindable var project: CompositionProject
     let session: CaptureSession
+    let selectedImageIDs: Set<UUID>
 
     @State private var selectedLayer: CompositionLayer?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showDocumentPicker = false
+    @State private var showBackgroundLibrary = false
     @State private var canvasSize: CGSize = .zero
+    @State private var shareItem: ExportShareItem?
 
-    init(project: CompositionProject, session: CaptureSession) {
+    init(project: CompositionProject, session: CaptureSession, selectedImageIDs: Set<UUID>) {
         self._project = Bindable(project)
         self.session = session
+        self.selectedImageIDs = selectedImageIDs
     }
 
     var body: some View {
@@ -47,6 +56,13 @@ struct VisualEditorView: View {
                 Button("Done") { dismiss() }
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    exportComposition()
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .disabled(canvasSize == .zero)
+
                 PhotosPicker(selection: $selectedPhoto, matching: .images) {
                     Image(systemName: "photo.badge.plus")
                 }
@@ -58,7 +74,12 @@ struct VisualEditorView: View {
             }
         }
         .onAppear {
-            viewModel.configure(context: modelContext, project: project, session: session)
+            viewModel.configure(
+                context: modelContext,
+                project: project,
+                session: session,
+                selectedImageIDs: selectedImageIDs
+            )
         }
         .onChange(of: selectedPhoto) { _, newValue in
             guard let newValue else { return }
@@ -80,6 +101,25 @@ struct VisualEditorView: View {
                 }
             }
         }
+        .sheet(isPresented: $showBackgroundLibrary) {
+            NavigationStack {
+                let availableCategories = viewModel.backgroundLibrary
+                    .filter { $0.value.isEmpty == false }
+                    .map(\.key)
+                    .sorted { $0.displayName < $1.displayName }
+                BackgroundLibraryView(
+                    categories: availableCategories,
+                    backgroundsByCategory: viewModel.backgroundLibrary,
+                    onSelect: { background in
+                        viewModel.importBackgroundFromLibrary(background, into: session)
+                        showBackgroundLibrary = false
+                    }
+                )
+            }
+        }
+        .sheet(item: $shareItem, onDismiss: { shareItem = nil }) { item in
+            ActivityView(activityItems: [item.image])
+        }
     }
 
     private var backgroundGeneratorSection: some View {
@@ -88,6 +128,16 @@ struct VisualEditorView: View {
                 .font(.title3)
                 .fontWeight(.semibold)
             backgroundGenerationForm
+            if viewModel.hasBackgroundLibrary {
+                Button {
+                    showBackgroundLibrary = true
+                } label: {
+                    Label("Browse Background Library", systemImage: "square.grid.2x2")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
             generatedBackgroundCarousel
         }
     }
@@ -272,6 +322,16 @@ struct VisualEditorView: View {
             selectedPhoto = nil
         }
     }
+
+    private func exportComposition() {
+        guard canvasSize != .zero else { return }
+        guard let image = viewModel.renderCompositeImage(size: canvasSize) else {
+            viewModel.errorMessage = "Unable to export the current composition."
+            viewModel.showError = true
+            return
+        }
+        shareItem = ExportShareItem(image: image)
+    }
 }
 
 #Preview {
@@ -290,9 +350,15 @@ struct VisualEditorView: View {
     }
 
     let session = CaptureSession(stockNumber: "ABC123", title: "ABC123", notes: "Premium package")
+    let sampleImage = ProcessedImage(image: UIImage(systemName: "car.fill") ?? UIImage(), session: session)
+    session.images.append(sampleImage)
     let project = CompositionProject(name: "Composition ABC123", session: session)
     return NavigationStack {
-        VisualEditorView(project: project, session: session)
+        VisualEditorView(
+            project: project,
+            session: session,
+            selectedImageIDs: Set(session.images.map(\.id))
+        )
     }
     .modelContainer(container)
 }

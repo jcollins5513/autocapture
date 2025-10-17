@@ -15,13 +15,22 @@ struct SessionDetailView: View {
     @Bindable var session: CaptureSession
 
     @State private var showCamera = false
-    @State private var selectedProject: CompositionProject?
+    @State private var showCaptureSelection = false
+    @State private var pendingProject: CompositionProject?
+    @State private var editorPresentation: EditorPresentation?
+    @State private var captureSelection: Set<UUID> = []
     @State private var selectedStatus: CaptureSession.Status
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 12),
         GridItem(.flexible(), spacing: 12)
     ]
+
+    private struct EditorPresentation: Identifiable {
+        let id = UUID()
+        let project: CompositionProject
+        let selectedImageIDs: Set<UUID>
+    }
 
     init(session: CaptureSession) {
         self._session = Bindable(session)
@@ -65,15 +74,46 @@ struct SessionDetailView: View {
                     }
             }
         }
-        .sheet(item: $selectedProject) { project in
+        .sheet(isPresented: $showCaptureSelection) {
             NavigationStack {
-                VisualEditorView(project: project, session: session)
+                if let project = pendingProject {
+                    CaptureSelectionView(
+                        images: session.images.sorted(by: { $0.captureDate > $1.captureDate }),
+                        selectedIDs: $captureSelection
+                    ) {
+                        let selection = captureSelection
+                        editorPresentation = EditorPresentation(project: project, selectedImageIDs: selection)
+                        showCaptureSelection = false
+                        pendingProject = nil
+                    }
+                } else {
+                    ContentUnavailableView("No Project", systemImage: "exclamationmark.triangle")
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close") { showCaptureSelection = false }
+                            }
+                        }
+                }
+            }
+        }
+        .sheet(item: $editorPresentation) { presentation in
+            NavigationStack {
+                VisualEditorView(
+                    project: presentation.project,
+                    session: session,
+                    selectedImageIDs: presentation.selectedImageIDs
+                )
             }
         }
         .onChange(of: selectedStatus) { _, newValue in
             session.status = newValue
             session.touch()
             try? modelContext.save()
+        }
+        .onChange(of: showCaptureSelection) { _, isPresented in
+            if isPresented == false {
+                pendingProject = nil
+            }
         }
     }
 
@@ -194,7 +234,18 @@ struct SessionDetailView: View {
 
     private func openEditor() {
         guard let project = ensureProject() else { return }
-        selectedProject = project
+        pendingProject = project
+
+        let sessionImageIDs = Set(session.images.map(\.id))
+        let existingLayerIDs = Set(project.layers.compactMap { $0.processedImageID })
+        if existingLayerIDs.isEmpty {
+            captureSelection = sessionImageIDs
+        } else {
+            let intersection = existingLayerIDs.intersection(sessionImageIDs)
+            captureSelection = intersection.isEmpty ? sessionImageIDs : intersection
+        }
+
+        showCaptureSelection = true
     }
 
     private func ensureProject() -> CompositionProject? {
