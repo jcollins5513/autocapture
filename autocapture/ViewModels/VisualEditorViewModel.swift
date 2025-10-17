@@ -21,6 +21,7 @@ final class VisualEditorViewModel: ObservableObject {
     @Published var showError = false
     @Published var errorMessage: String?
     @Published var generatedBackgrounds: [GeneratedBackground] = []
+    @Published private(set) var backgroundLibrary: [BackgroundCategory: [GeneratedBackground]] = [:]
 
     @Published var activeProject: CompositionProject?
 
@@ -31,31 +32,71 @@ final class VisualEditorViewModel: ObservableObject {
         self.backgroundGenerationService = backgroundGenerationService ?? BackgroundGenerationService()
     }
 
-    func configure(context: ModelContext, project: CompositionProject, session: CaptureSession?) {
+    func configure(
+        context: ModelContext,
+        project: CompositionProject,
+        session: CaptureSession?,
+        selectedImageIDs: Set<UUID>
+    ) {
         self.modelContext = context
         self.activeProject = project
+
         if let session {
             generatedBackgrounds = session.generatedBackgrounds.sorted { $0.createdAt > $1.createdAt }
             if let primary = session.primaryCategory {
                 selectedCategory = primary
             }
-            ensureSubjectLayers(for: project, from: session, context: context)
+            synchronizeSubjectLayers(
+                for: project,
+                from: session,
+                selectedIDs: selectedImageIDs,
+                context: context
+            )
+            loadBackgroundLibrary(excluding: session)
         } else {
             generatedBackgrounds = []
+            backgroundLibrary = [:]
         }
-        if let projectBackground = project.background {
-            if generatedBackgrounds.contains(where: { $0.id == projectBackground.id }) == false {
-                generatedBackgrounds.insert(projectBackground, at: 0)
-            }
+
+        if let projectBackground = project.background,
+           generatedBackgrounds.contains(where: { $0.id == projectBackground.id }) == false {
+            generatedBackgrounds.insert(projectBackground, at: 0)
         }
     }
 
-    private func ensureSubjectLayers(for project: CompositionProject, from session: CaptureSession, context: ModelContext) {
-        let existingIDs = Set(project.layers.compactMap { $0.processedImageID })
-        let sortedImages = session.images.sorted { $0.captureDate < $1.captureDate }
-        var addedLayer = false
+    private func synchronizeSubjectLayers(
+        for project: CompositionProject,
+        from session: CaptureSession,
+        selectedIDs: Set<UUID>,
+        context: ModelContext
+    ) {
+        var requiresSave = false
 
-        for image in sortedImages where existingIDs.contains(image.id) == false {
+        let sortedImages = session.images
+            .filter { selectedIDs.isEmpty ? true : selectedIDs.contains($0.id) }
+            .sorted { $0.captureDate < $1.captureDate }
+
+        let existingSubjectLayers = project.layers.filter { $0.processedImageID != nil }
+        let existingIDs = Set(existingSubjectLayers.compactMap { $0.processedImageID })
+
+        if selectedIDs.isEmpty == false {
+            let layersToRemove = existingSubjectLayers.filter { layer in
+                guard let identifier = layer.processedImageID else { return false }
+                return selectedIDs.contains(identifier) == false
+            }
+
+            if layersToRemove.isEmpty == false {
+                for layer in layersToRemove {
+                    project.layers.removeAll { $0.id == layer.id }
+                    context.delete(layer)
+                }
+                requiresSave = true
+            }
+        }
+
+        var updatedExistingIDs = existingIDs
+
+        for image in sortedImages where updatedExistingIDs.contains(image.id) == false {
             guard let uiImage = image.image,
                   let data = uiImage.pngData(),
                   data.isEmpty == false else {
@@ -80,10 +121,11 @@ final class VisualEditorViewModel: ObservableObject {
 
             project.layers.append(newLayer)
             context.insert(newLayer)
-            addedLayer = true
+            updatedExistingIDs.insert(image.id)
+            requiresSave = true
         }
 
-        if addedLayer {
+        if requiresSave {
             project.layers.enumerated().forEach { index, layer in
                 layer.order = index
             }
@@ -199,6 +241,66 @@ final class VisualEditorViewModel: ObservableObject {
         saveAsync()
     }
 
+    private func loadBackgroundLibrary(excluding session: CaptureSession) {
+        guard let modelContext else {
+            backgroundLibrary = [:]
+            return
+        }
+
+        let descriptor = FetchDescriptor<GeneratedBackground>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+
+        do {
+            let backgrounds = try modelContext.fetch(descriptor)
+            let excludedIDs = Set(session.generatedBackgrounds.map(\.id))
+            var grouped: [BackgroundCategory: [GeneratedBackground]] = [:]
+
+            for background in backgrounds where excludedIDs.contains(background.id) == false {
+                var entries = grouped[background.category] ?? []
+                entries.append(background)
+                entries.sort { $0.createdAt > $1.createdAt }
+                grouped[background.category] = entries
+            }
+
+            backgroundLibrary = grouped
+        } catch {
+            backgroundLibrary = [:]
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+
+    func importBackgroundFromLibrary(_ background: GeneratedBackground, into session: CaptureSession) {
+        guard let context = modelContext else { return }
+
+        let copy = GeneratedBackground(
+            prompt: background.prompt,
+            category: background.category,
+            aspectRatio: background.aspectRatio,
+            isCommunityShared: background.isCommunityShared,
+            session: session,
+            imageData: background.imageData
+        )
+
+        activeProject?.background = copy
+        activeProject?.touch()
+        session.generatedBackgrounds.append(copy)
+        generatedBackgrounds.insert(copy, at: 0)
+
+        context.insert(copy)
+
+        do {
+            try context.save()
+            loadBackgroundLibrary(excluding: session)
+        } catch {
+            context.delete(copy)
+            generatedBackgrounds.removeAll { $0.id == copy.id }
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+
     func delete(layer: CompositionLayer) {
         guard let context = modelContext else { return }
         context.delete(layer)
@@ -260,5 +362,14 @@ final class VisualEditorViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    func renderCompositeImage(size: CGSize) -> UIImage? {
+        guard let project = activeProject else { return nil }
+        return CompositionRenderer.render(project: project, canvasSize: size)
+    }
+
+    var hasBackgroundLibrary: Bool {
+        backgroundLibrary.values.contains { $0.isEmpty == false }
     }
 }
