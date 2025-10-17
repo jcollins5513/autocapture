@@ -1,7 +1,7 @@
 ---
 alwaysApply: true
 ---
-# 🎨 UI/UX Design Principles for AutoCapture
+# 🎨 UI/UX Design Principles for AutoCapture (iOS 26)
 
 You are designing UI/UX for AutoCapture iOS app. Follow these design principles for a professional, intuitive user experience.
 
@@ -14,10 +14,10 @@ You are designing UI/UX for AutoCapture iOS app. Follow these design principles 
 - **Efficiency**: Streamlined workflows for professional use
 
 ### Modern iOS Design
-- **iOS 17+ Design Language**: Follow latest iOS design guidelines
-- **Liquid Glass**: Modern glassmorphism design elements
-- **Accessibility**: Full VoiceOver and accessibility support
-- **Responsive**: Adaptive layouts for different screen sizes
+- **Human Interface Guidelines**: Follow Apple’s latest iOS 26 guidance from the [Design Resources portal](https://developer.apple.com/design/resources/) so AutoCapture remains visually native.
+- **Liquid Glass Surfaces**: Adopt the iOS 26 liquid glass materials for overlays, control trays, and toolbars to match Control Center and Lock Screen aesthetics.
+- **Enhanced Accessibility**: Integrate VoiceOver rotor actions, Dynamic Type scaling, haptic affordances, and the iOS 26 contrast auditing workflow.
+- **Responsive Layouts**: Support Stage Manager, Display Zoom, and multitasking using SwiftUI’s adaptive layout APIs (`ViewThatFits`, custom `Layout` types).
 
 ## 📱 Layout Principles
 
@@ -42,26 +42,20 @@ You are designing UI/UX for AutoCapture iOS app. Follow these design principles 
 ## 🎨 Visual Design
 
 ### Color Palette
+Use semantic system colors so the UI automatically adapts to liquid-glass transparency, vibrancy, and Dark Mode in iOS 26.
 ```swift
-// Primary Colors
-extension Color {
-    static let autocapturePrimary = Color.blue
-    static let autocaptureSecondary = Color.gray
-    static let autocaptureAccent = Color.orange
-    
-    // Semantic Colors
-    static let autocaptureSuccess = Color.green
-    static let autocaptureWarning = Color.orange
-    static let autocaptureError = Color.red
-    static let autocaptureInfo = Color.blue
-}
+import SwiftUI
 
-// Dark Mode Support
-extension Color {
-    static let autocaptureBackground = Color(.systemBackground)
-    static let autocaptureSecondaryBackground = Color(.secondarySystemBackground)
-    static let autocaptureLabel = Color(.label)
-    static let autocaptureSecondaryLabel = Color(.secondaryLabel)
+enum AutoCaptureColor {
+    static let chrome = Color(uiColor: .secondarySystemBackground)
+    static let accent = Color.cyan
+    static let critical = Color.red
+    static let success = Color.green
+    static let warning = Color.orange
+
+    static let label = Color(uiColor: .label)
+    static let secondaryLabel = Color(uiColor: .secondaryLabel)
+    static let fill = Color(uiColor: .tertiarySystemFill)
 }
 ```
 
@@ -101,6 +95,34 @@ extension CGFloat {
 }
 ```
 
+### Liquid Glass Implementation (iOS 26)
+Use the new `glassBackgroundEffect(in:)` API introduced in iOS 26 to render translucent control chrome that reflects ambient content, while providing a `.thinMaterial` fallback for older OS versions.
+```swift
+struct GlassToolbar<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        content()
+            .padding(.horizontal, .autocaptureSpacingL)
+            .padding(.vertical, .autocaptureSpacingM)
+            .background(
+                Group {
+                    if #available(iOS 26, *) {
+                        Color.clear.glassBackgroundEffect(in: .rect(cornerRadius: 28))
+                    } else {
+                        Color.clear.background(.thinMaterial)
+                    }
+                }
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 28)
+                    .strokeBorder(Color.white.opacity(0.1))
+            }
+            .shadow(color: .black.opacity(0.25), radius: 30, y: 16)
+    }
+}
+```
+
 ## 🔧 Component Design
 
 ### Camera Interface
@@ -112,16 +134,17 @@ struct CameraView: View {
             CameraPreviewView()
             
             // Overlay controls
-            VStack {
+            VStack(spacing: .autocaptureSpacingM) {
                 // Top controls
-                HStack {
-                    SettingsButton()
-                    Spacer()
-                    FlashButton()
-                    FlipCameraButton()
+                GlassToolbar {
+                    HStack(spacing: .autocaptureSpacingM) {
+                        SettingsButton()
+                        Spacer()
+                        FlashButton()
+                        FlipCameraButton()
+                    }
                 }
-                .padding(.horizontal, .autocaptureSpacingM)
-                .padding(.top, .autocaptureSpacingM)
+                .padding(.top, .autocaptureSpacingL)
                 
                 Spacer()
                 
@@ -129,6 +152,9 @@ struct CameraView: View {
                 VStack(spacing: .autocaptureSpacingM) {
                     ZoomSlider()
                     CaptureButton()
+                        .ifAvailableiOS26 { view in
+                            view.glassBackgroundEffect(in: .capsule)
+                        }
                 }
                 .padding(.bottom, .autocaptureSpacingL)
             }
@@ -136,6 +162,17 @@ struct CameraView: View {
     }
 }
 ```
+
+extension View {
+    @ViewBuilder
+    func ifAvailableiOS26<Transformed: View>(@ViewBuilder transform: (Self) -> Transformed) -> some View {
+        if #available(iOS 26, *) {
+            transform(self)
+        } else {
+            self
+        }
+    }
+}
 
 ### Button Styles
 ```swift
@@ -444,5 +481,3 @@ struct HapticButton: View {
 ---
 
 *Follow these UI/UX design principles to create a professional, intuitive, and accessible user experience for AutoCapture.*
-
-
