@@ -1,66 +1,66 @@
 //
 //  BackgroundRemovalService.swift
-//  autocapture
+//  AutoCapture
 //
 //  Created by Justin Collins on 10/14/25.
 //
 
+import Accelerate
+import CoreImage
 import UIKit
 import Vision
-import CoreImage
-import Accelerate
 
 class BackgroundRemovalService {
     private let context = CIContext(options: [
         .useSoftwareRenderer: false,
         .priorityRequestLow: false
     ])
-    
+
     func removeBackground(from image: UIImage) async throws -> UIImage {
         guard let cgImage = image.cgImage else {
             throw CameraError.backgroundRemovalFailed
         }
-        
+
         // Create the request for subject masking with optimized settings
         let request = VNGenerateForegroundInstanceMaskRequest()
-        
+
         // Perform the request with high-quality options
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [
             .ciContext: context
         ])
         try handler.perform([request])
-        
+
         guard let result = request.results?.first else {
             throw CameraError.noSubjectDetected
         }
-        
+
         // Get the pixel buffer from the observation
         let maskPixelBuffer = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
-        
+
         // Convert mask to CIImage
         var maskImage = CIImage(cvPixelBuffer: maskPixelBuffer)
-        
+
         // Create original image as CIImage
         let originalImage = CIImage(cgImage: cgImage)
-        
+
         // Refine the mask for cleaner edges
         maskImage = refineMask(maskImage)
-        
+
         // Apply the mask to create the final composited image
         let compositedImage = try applyMaskWithFeathering(mask: maskImage, to: originalImage)
-        
+
         // Convert back to UIImage
         guard let outputCGImage = context.createCGImage(compositedImage, from: compositedImage.extent) else {
             throw CameraError.backgroundRemovalFailed
         }
-        
+
         return UIImage(cgImage: outputCGImage, scale: image.scale, orientation: image.imageOrientation)
     }
-    
+
     /// Refines the mask using morphological operations and smoothing
     private func refineMask(_ mask: CIImage) -> CIImage {
         var refinedMask = mask
-        
+
         // 1. Initial erosion to tighten the mask and pull edges inward
         if let morphologyFilter = CIFilter(name: "CIMorphologyMinimum") {
             morphologyFilter.setValue(refinedMask, forKey: kCIInputImageKey)
@@ -69,7 +69,7 @@ class BackgroundRemovalService {
                 refinedMask = eroded
             }
         }
-        
+
         // 2. Small dilation to recover some detail (but less than erosion)
         if let morphologyFilter = CIFilter(name: "CIMorphologyMaximum") {
             morphologyFilter.setValue(refinedMask, forKey: kCIInputImageKey)
@@ -78,7 +78,7 @@ class BackgroundRemovalService {
                 refinedMask = dilated
             }
         }
-        
+
         // 3. Gamma adjustment to tighten boundaries (Apple's technique)
         if let gammaFilter = CIFilter(name: "CIGammaAdjust") {
             gammaFilter.setValue(refinedMask, forKey: kCIInputImageKey)
@@ -87,7 +87,7 @@ class BackgroundRemovalService {
                 refinedMask = gamma
             }
         }
-        
+
         // 4. Apply Gaussian blur for smooth, feathered edges
         if let blurFilter = CIFilter(name: "CIGaussianBlur") {
             blurFilter.setValue(refinedMask, forKey: kCIInputImageKey)
@@ -96,7 +96,7 @@ class BackgroundRemovalService {
                 refinedMask = blurred
             }
         }
-        
+
         // 5. Adjust contrast to sharpen the transition zone
         if let contrastFilter = CIFilter(name: "CIColorControls") {
             contrastFilter.setValue(refinedMask, forKey: kCIInputImageKey)
@@ -105,19 +105,19 @@ class BackgroundRemovalService {
                 refinedMask = contrasted
             }
         }
-        
+
         return refinedMask
     }
-    
+
     /// Applies the mask with proper feathering for clean, natural edges
     private func applyMaskWithFeathering(mask: CIImage, to image: CIImage) throws -> CIImage {
         // Scale mask to match image size using bicubic interpolation (highest quality)
         let scaleX = image.extent.width / mask.extent.width
         let scaleY = image.extent.height / mask.extent.height
-        
+
         // Use bicubic scaling for smoother results
         var scaledMask = mask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
-        
+
         // Apply lanczos scale filter for even better quality
         if let scaleFilter = CIFilter(name: "CILanczosScaleTransform") {
             scaleFilter.setValue(mask, forKey: kCIInputImageKey)
@@ -127,34 +127,33 @@ class BackgroundRemovalService {
                 scaledMask = scaled
             }
         }
-        
+
         // Create a transparent background
         let transparent = CIImage(color: .clear).cropped(to: image.extent)
-        
+
         // Use the mask to blend the original image with transparency
         // This creates smooth alpha transitions at edges
         guard let blendFilter = CIFilter(name: "CIBlendWithMask") else {
             throw CameraError.backgroundRemovalFailed
         }
-        
+
         blendFilter.setValue(image, forKey: kCIInputImageKey)
         blendFilter.setValue(transparent, forKey: kCIInputBackgroundImageKey)
         blendFilter.setValue(scaledMask, forKey: kCIInputMaskImageKey)
-        
+
         guard let outputImage = blendFilter.outputImage else {
             throw CameraError.backgroundRemovalFailed
         }
-        
+
         // Apply subtle edge enhancement for crisper details
         guard let sharpenFilter = CIFilter(name: "CIUnsharpMask") else {
             return outputImage
         }
-        
+
         sharpenFilter.setValue(outputImage, forKey: kCIInputImageKey)
         sharpenFilter.setValue(0.6, forKey: kCIInputRadiusKey) // Slightly increased
         sharpenFilter.setValue(0.4, forKey: kCIInputIntensityKey) // More sharpening
-        
+
         return sharpenFilter.outputImage ?? outputImage
     }
 }
-

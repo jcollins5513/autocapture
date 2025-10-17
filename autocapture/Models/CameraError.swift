@@ -1,6 +1,6 @@
 //
 //  CameraError.swift
-//  autocapture
+//  AutoCapture
 //
 //  Created by Justin Collins on 10/14/25.
 //
@@ -13,7 +13,7 @@ enum CameraError: LocalizedError {
     case backgroundRemovalFailed
     case noSubjectDetected
     case unauthorized
-    
+
     var errorDescription: String? {
         switch self {
         case .cameraUnavailable:
@@ -29,5 +29,3 @@ enum CameraError: LocalizedError {
         }
     }
 }
-
-

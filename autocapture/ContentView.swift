@@ -1,20 +1,20 @@
 //
 //  ContentView.swift
-//  autocapture
+//  AutoCapture
 //
 //  Created by Justin Collins on 10/14/25.
 //
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        CameraView()
+        BatchManagerView()
     }
 }
 
 #Preview {
     ContentView()
-        .modelContainer(for: ProcessedImage.self, inMemory: true)
+        .modelContainer(for: [CaptureSession.self, ProcessedImage.self, GeneratedBackground.self, CompositionProject.self, CompositionLayer.self], inMemory: true)
 }
