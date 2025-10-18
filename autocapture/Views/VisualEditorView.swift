@@ -5,6 +5,8 @@
 //  Created by OpenAI Assistant on 10/15/25.
 //
 
+// swiftlint:disable file_length type_body_length
+
 import PhotosUI
 import SwiftData
 import SwiftUI
@@ -26,12 +28,20 @@ struct VisualEditorView: View {
     let session: CaptureSession
     let selectedImageIDs: Set<UUID>
 
+    private enum ImportSource {
+        case photos
+        case files
+    }
+
     @State private var selectedLayer: CompositionLayer?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showDocumentPicker = false
     @State private var showBackgroundLibrary = false
     @State private var canvasSize: CGSize = .zero
     @State private var shareItem: ExportShareItem?
+    @State private var pendingImportImage: UIImage?
+    @State private var pendingImportSource: ImportSource?
+    @State private var showImportOptions = false
 
     init(project: CompositionProject, session: CaptureSession, selectedImageIDs: Set<UUID>) {
         self._project = Bindable(project)
@@ -40,14 +50,31 @@ struct VisualEditorView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                backgroundGeneratorSection
-                canvasSection
-                layerControlsSection
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    backgroundGeneratorSection
+                    canvasSection
+                    layerControlsSection
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 32)
             }
-            .padding(.horizontal)
-            .padding(.bottom, 32)
+
+            if viewModel.isImportingLayer {
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                VStack(spacing: 12) {
+                    ProgressView("Removing background…")
+                        .progressViewStyle(.circular)
+                    Text("Hang tight while we isolate the subject.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(20)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+                .shadow(radius: 10)
+            }
         }
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -85,6 +112,23 @@ struct VisualEditorView: View {
             guard let newValue else { return }
             Task { await importPhoto(item: newValue) }
         }
+        .confirmationDialog(
+            "How should we import this image?",
+            isPresented: $showImportOptions,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Background") {
+                importPendingImage(applyBackgroundRemoval: true)
+            }
+            Button("Keep Original") {
+                importPendingImage(applyBackgroundRemoval: false)
+            }
+            Button("Cancel", role: .cancel) {
+                resetPendingImport()
+            }
+        } message: {
+            Text("Choose whether to keep the background or automatically lift the subject.")
+        }
         .alert("Editor Error", isPresented: $viewModel.showError) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -94,7 +138,15 @@ struct VisualEditorView: View {
             DocumentPickerView { result in
                 switch result {
                 case .success(let image):
-                    if let image { viewModel.addLayer(from: image, name: "Imported Layer", type: .upload) }
+                    if let image {
+                        Task { @MainActor in
+                            handleImportedImage(image, source: .files)
+                        }
+                    } else {
+                        Task { @MainActor in
+                            resetPendingImport()
+                        }
+                    }
                 case .failure(let error):
                     viewModel.errorMessage = error.localizedDescription
                     viewModel.showError = true
@@ -306,7 +358,11 @@ struct VisualEditorView: View {
                     selectedLayer = nil
                 }
                 viewModel.delete(layer: layer)
-            }
+            },
+            onCleanup: viewModel.canClean(layer: layer) ? {
+                viewModel.cleanLayer(layer)
+            } : nil,
+            isProcessing: viewModel.cleaningLayerIDs.contains(layer.id)
         )
         .padding(.horizontal)
         .padding(.vertical, 8)
@@ -318,7 +374,7 @@ struct VisualEditorView: View {
     private func importPhoto(item: PhotosPickerItem) async {
         guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else { return }
         await MainActor.run {
-            viewModel.addLayer(from: image, name: "Imported Layer", type: .upload)
+            handleImportedImage(image, source: .photos)
             selectedPhoto = nil
         }
     }
@@ -331,6 +387,46 @@ struct VisualEditorView: View {
             return
         }
         shareItem = ExportShareItem(image: image)
+    }
+
+    @MainActor
+    private func handleImportedImage(_ image: UIImage, source: ImportSource) {
+        pendingImportImage = image
+        pendingImportSource = source
+        showImportOptions = true
+    }
+
+    @MainActor
+    private func importPendingImage(applyBackgroundRemoval: Bool) {
+        guard let image = pendingImportImage else { return }
+
+        let defaultName: String
+        switch (applyBackgroundRemoval, pendingImportSource) {
+        case (true, _):
+            defaultName = "Imported Subject"
+        case (false, .photos):
+            defaultName = "Imported Photo"
+        case (false, .files):
+            defaultName = "Imported Asset"
+        case (false, .none):
+            defaultName = "Imported Layer"
+        }
+
+        viewModel.importLayer(
+            from: image,
+            removeBackground: applyBackgroundRemoval,
+            name: defaultName,
+            type: .upload
+        )
+
+        resetPendingImport()
+    }
+
+    @MainActor
+    private func resetPendingImport() {
+        pendingImportImage = nil
+        pendingImportSource = nil
+        showImportOptions = false
     }
 }
 
@@ -362,3 +458,5 @@ struct VisualEditorView: View {
     }
     .modelContainer(container)
 }
+
+// swiftlint:enable file_length type_body_length

@@ -12,6 +12,11 @@ private struct BackgroundGenerationAPIResponse: Decodable {
     struct Item: Decodable {
         let base64JSON: String?
         let url: String?
+
+        enum CodingKeys: String, CodingKey {
+            case base64JSON = "b64_json"
+            case url
+        }
     }
 
     let data: [Item]
@@ -146,7 +151,9 @@ final class BackgroundGenerationService {
     }
 
     private func imageData(from item: BackgroundGenerationAPIResponse.Item) async throws -> Data {
-        if let base64 = item.base64JSON, let data = Data(base64Encoded: base64) {
+        if let base64 = item.base64JSON?.trimmingCharacters(in: .whitespacesAndNewlines),
+           base64.isEmpty == false,
+           let data = Data(base64Encoded: base64) {
             return data
         }
 

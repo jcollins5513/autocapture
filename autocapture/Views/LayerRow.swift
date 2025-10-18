@@ -18,6 +18,8 @@ struct LayerRow: View {
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onDelete: () -> Void
+    let onCleanup: (() -> Void)?
+    let isProcessing: Bool
 
     var body: some View {
         HStack {
@@ -43,32 +45,68 @@ struct LayerRow: View {
 
     private var actionButtons: some View {
         HStack(spacing: 12) {
-            Button(action: onMoveUp) {
-                Image(systemName: "arrow.up")
-            }
-            .disabled(canMoveUp == false)
-            .buttonStyle(.borderless)
-
-            Button(action: onMoveDown) {
-                Image(systemName: "arrow.down")
-            }
-            .disabled(canMoveDown == false)
-            .buttonStyle(.borderless)
-
-            Button(action: onVisibility) {
-                Image(systemName: layer.isVisible ? "eye.fill" : "eye.slash")
-            }
-            .buttonStyle(.borderless)
-
-            Button(action: onLock) {
-                Image(systemName: layer.isLocked ? "lock.fill" : "lock.open")
-            }
-            .buttonStyle(.borderless)
-
-            Button(role: .destructive, action: onDelete) {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
+            cleanupControl
+            moveUpButton
+            moveDownButton
+            visibilityButton
+            lockButton
+            deleteButton
         }
+    }
+
+    @ViewBuilder private var cleanupControl: some View {
+        if let onCleanup {
+            if isProcessing {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .frame(width: 20, height: 20)
+            } else {
+                Button(action: onCleanup) {
+                    Image(systemName: "wand.and.stars")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Clean up subject edges")
+            }
+        }
+    }
+
+    private var moveUpButton: some View {
+        Button(action: onMoveUp) {
+            Image(systemName: "arrow.up")
+        }
+        .disabled(isProcessing || canMoveUp == false)
+        .buttonStyle(.borderless)
+    }
+
+    private var moveDownButton: some View {
+        Button(action: onMoveDown) {
+            Image(systemName: "arrow.down")
+        }
+        .disabled(isProcessing || canMoveDown == false)
+        .buttonStyle(.borderless)
+    }
+
+    private var visibilityButton: some View {
+        Button(action: onVisibility) {
+            Image(systemName: layer.isVisible ? "eye.fill" : "eye.slash")
+        }
+        .disabled(isProcessing)
+        .buttonStyle(.borderless)
+    }
+
+    private var lockButton: some View {
+        Button(action: onLock) {
+            Image(systemName: layer.isLocked ? "lock.fill" : "lock.open")
+        }
+        .disabled(isProcessing)
+        .buttonStyle(.borderless)
+    }
+
+    private var deleteButton: some View {
+        Button(role: .destructive, action: onDelete) {
+            Image(systemName: "trash")
+        }
+        .disabled(isProcessing)
+        .buttonStyle(.borderless)
     }
 }

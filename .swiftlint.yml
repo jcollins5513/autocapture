@@ -140,6 +140,6 @@ excluded:
   - .build
   - DerivedData
   - autocapture.xcodeproj
+  - Docs
   - Tests/AutoCaptureTests/Generated
-
 

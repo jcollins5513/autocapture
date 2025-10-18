@@ -5,7 +5,7 @@
 //  Created by OpenAI Assistant on 10/15/25.
 //
 
-// swiftlint:disable type_body_length function_body_length
+// swiftlint:disable type_body_length function_body_length file_length
 import Combine
 import Foundation
 import SwiftData
@@ -23,14 +23,21 @@ final class VisualEditorViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var generatedBackgrounds: [GeneratedBackground] = []
     @Published private(set) var backgroundLibrary: [BackgroundCategory: [GeneratedBackground]] = [:]
+    @Published var isImportingLayer = false
+    @Published private(set) var cleaningLayerIDs: Set<UUID> = []
 
     @Published var activeProject: CompositionProject?
 
     private let backgroundGenerationService: BackgroundGenerationService
+    private let backgroundRemovalService: BackgroundRemovalService
     private var modelContext: ModelContext?
 
-    init(backgroundGenerationService: BackgroundGenerationService? = nil) {
+    init(
+        backgroundGenerationService: BackgroundGenerationService? = nil,
+        backgroundRemovalService: BackgroundRemovalService? = nil
+    ) {
         self.backgroundGenerationService = backgroundGenerationService ?? BackgroundGenerationService()
+        self.backgroundRemovalService = backgroundRemovalService ?? BackgroundRemovalService()
     }
 
     func configure(
@@ -190,7 +197,7 @@ final class VisualEditorViewModel: ObservableObject {
         processedImageID: UUID? = nil
     ) {
         guard let context = modelContext, let project = activeProject, let data = image.pngData() else { return }
-        let layerName = name ?? "Layer \(project.layers.count + 1)"
+        let layerName = name ?? generateDefaultLayerName(for: type)
         let newLayer = CompositionLayer(
             name: layerName,
             order: project.layers.count,
@@ -206,6 +213,127 @@ final class VisualEditorViewModel: ObservableObject {
             try context.save()
         } catch {
             context.delete(newLayer)
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+
+    func importLayer(
+        from image: UIImage,
+        removeBackground: Bool,
+        name: String? = nil,
+        type: CompositionLayer.LayerType = .upload
+    ) {
+        guard removeBackground else {
+            addLayer(from: image, name: name, type: type, processedImageID: nil)
+            isImportingLayer = false
+            return
+        }
+
+        Task.detached(priority: .userInitiated) { [weak self, backgroundRemovalService] in
+            guard let self else { return }
+
+            await MainActor.run {
+                self.isImportingLayer = true
+            }
+
+            do {
+                let processedImage = try await backgroundRemovalService.removeBackground(from: image)
+                await MainActor.run {
+                    let resolvedType: CompositionLayer.LayerType = removeBackground ? .subject : type
+                    let resolvedName = name ?? self.generateDefaultLayerName(for: resolvedType)
+                    self.addLayer(
+                        from: processedImage,
+                        name: resolvedName,
+                        type: resolvedType,
+                        processedImageID: nil
+                    )
+                    self.isImportingLayer = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.isImportingLayer = false
+                    self.errorMessage = error.localizedDescription
+                    self.showError = true
+                }
+            }
+        }
+    }
+
+    private func generateDefaultLayerName(for type: CompositionLayer.LayerType) -> String {
+        guard let project = activeProject else { return "Layer" }
+        let count = project.layers.count + 1
+        switch type {
+        case .subject:
+            return "Subject \(count)"
+        case .upload:
+            return "Imported Layer \(count)"
+        case .background:
+            return "Background \(count)"
+        case .adjustment:
+            return "Adjustment \(count)"
+        }
+    }
+
+    func cleanLayer(_ layer: CompositionLayer) {
+        guard let image = UIImage(data: layer.imageData) else {
+            errorMessage = CameraError.backgroundRemovalFailed.localizedDescription
+            showError = true
+            return
+        }
+
+        let layerID = layer.id
+
+        Task.detached(priority: .userInitiated) { [weak self, backgroundRemovalService] in
+            guard let self else { return }
+
+            await MainActor.run {
+                self.cleaningLayerIDs.insert(layerID)
+            }
+
+            do {
+                let cleaned = try await backgroundRemovalService.removeBackground(from: image)
+                guard let cleanedData = cleaned.pngData() else {
+                    throw CameraError.backgroundRemovalFailed
+                }
+
+                await MainActor.run {
+                    layer.imageData = cleanedData
+                    layer.project?.touch()
+                    self.cleaningLayerIDs.remove(layerID)
+                    if let processedImageID = layer.processedImageID {
+                        self.updateProcessedImage(id: processedImageID, data: cleanedData)
+                    }
+                    self.saveAsync()
+                }
+            } catch {
+                await MainActor.run {
+                    self.cleaningLayerIDs.remove(layerID)
+                    self.errorMessage = error.localizedDescription
+                    self.showError = true
+                }
+            }
+        }
+    }
+
+    func canClean(layer: CompositionLayer) -> Bool {
+        layer.type == .subject || layer.type == .upload
+    }
+
+    private func updateProcessedImage(id: UUID, data: Data) {
+        guard let context = modelContext else { return }
+        var descriptor = FetchDescriptor<ProcessedImage>(
+            predicate: #Predicate { $0.id == id }
+        )
+        descriptor.fetchLimit = 1
+
+        do {
+            if let processedImage = try context.fetch(descriptor).first {
+                processedImage.imageData = data
+                processedImage.captureDate = Date()
+                processedImage.session?.touch()
+            }
+        } catch {
             errorMessage = error.localizedDescription
             showError = true
         }
@@ -375,4 +503,4 @@ final class VisualEditorViewModel: ObservableObject {
     }
 }
 
-// swiftlint:enable type_body_length function_body_length
+// swiftlint:enable type_body_length function_body_length file_length

@@ -103,9 +103,34 @@ class CameraService: NSObject, ObservableObject {
         settings.flashMode = flashMode
         settings.photoQualityPrioritization = .quality
 
+        if let connection = photoOutput.connection(with: .video) {
+            if let orientation = await fetchCurrentVideoOrientation() {
+                connection.videoOrientation = orientation
+            }
+
+            if connection.isVideoMirroringSupported {
+                connection.isVideoMirrored = videoDeviceInput?.device.position == .front
+            }
+        }
+
         return try await withCheckedThrowingContinuation { continuation in
             photoContinuation = continuation
             photoOutput.capturePhoto(with: settings, delegate: self)
+        }
+    }
+
+    private func fetchCurrentVideoOrientation() async -> AVCaptureVideoOrientation? {
+        await MainActor.run {
+            if let interfaceOrientation = UIApplication.shared
+                .connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive })?
+                .interfaceOrientation,
+               let orientation = AVCaptureVideoOrientation(interfaceOrientation: interfaceOrientation) {
+                return orientation
+            }
+
+            return AVCaptureVideoOrientation(deviceOrientation: UIDevice.current.orientation)
         }
     }
 
