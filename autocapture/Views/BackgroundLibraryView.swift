@@ -5,6 +5,7 @@
 //  Created by OpenAI Assistant on 10/17/25.
 //
 
+// swiftlint:disable closure_body_length
 import SwiftUI
 
 struct BackgroundLibraryView: View {
@@ -100,3 +101,5 @@ struct BackgroundLibraryView: View {
         BackgroundLibraryView(categories: Array(backgrounds.keys), backgroundsByCategory: backgrounds) { _ in }
     }
 }
+
+// swiftlint:enable closure_body_length

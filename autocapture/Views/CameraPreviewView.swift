@@ -93,23 +93,23 @@ struct CameraPreviewView: UIViewRepresentable {
             }
         }
     }
-}
 
-private final class PreviewContainerView: UIView {
-    var previewLayer: AVCaptureVideoPreviewLayer? {
-        didSet {
-            oldValue?.removeFromSuperlayer()
+    final class PreviewContainerView: UIView {
+        var previewLayer: AVCaptureVideoPreviewLayer? {
+            didSet {
+                oldValue?.removeFromSuperlayer()
 
-            if let previewLayer {
-                layer.addSublayer(previewLayer)
-                setNeedsLayout()
+                if let previewLayer {
+                    layer.addSublayer(previewLayer)
+                    setNeedsLayout()
+                }
             }
         }
-    }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        previewLayer?.frame = bounds
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            previewLayer?.frame = bounds
+        }
     }
 }
 

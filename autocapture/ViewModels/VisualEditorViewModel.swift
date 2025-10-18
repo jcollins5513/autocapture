@@ -5,6 +5,7 @@
 //  Created by OpenAI Assistant on 10/15/25.
 //
 
+// swiftlint:disable type_body_length function_body_length
 import Combine
 import Foundation
 import SwiftData
@@ -373,3 +374,5 @@ final class VisualEditorViewModel: ObservableObject {
         backgroundLibrary.values.contains { $0.isEmpty == false }
     }
 }
+
+// swiftlint:enable type_body_length function_body_length

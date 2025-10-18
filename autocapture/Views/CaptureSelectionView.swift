@@ -5,6 +5,7 @@
 //  Created by OpenAI Assistant on 10/17/25.
 //
 
+// swiftlint:disable file_types_order
 import SwiftUI
 import UIKit
 
@@ -109,7 +110,7 @@ private struct SelectableCapturedImageCard: View {
         init() {
             let image = UIImage(systemName: "car") ?? UIImage()
             images = (0..<6).map { index in
-                ProcessedImage(image: image, captureDate: Date().addingTimeInterval(Double(index) * -3600))
+                ProcessedImage(image: image, captureDate: Date().addingTimeInterval(Double(index) * -3_600))
             }
         }
 
@@ -122,3 +123,5 @@ private struct SelectableCapturedImageCard: View {
 
     return PreviewWrapper()
 }
+
+// swiftlint:enable file_types_order

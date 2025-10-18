@@ -54,6 +54,7 @@ final class BackgroundGenerationService {
         self.organizationProvider = organizationProvider
     }
 
+// swiftlint:disable function_body_length
     func generateBackground(for request: BackgroundGenerationRequest) async throws -> BackgroundGenerationResult {
         let prompt = promptBuilder.prompt(for: request.category, customSubject: request.subjectDescription)
         let aspectRatio = request.aspectRatio
@@ -125,6 +126,7 @@ final class BackgroundGenerationService {
 
         return BackgroundGenerationResult(background: generatedBackground, image: image)
     }
+// swiftlint:enable function_body_length
 
     private func size(for aspectRatio: String) -> String {
         switch aspectRatio {

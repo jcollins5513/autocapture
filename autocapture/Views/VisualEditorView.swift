@@ -117,9 +117,9 @@ struct VisualEditorView: View {
                 )
             }
         }
-        .sheet(item: $shareItem, onDismiss: { shareItem = nil }) { item in
+        .sheet(item: $shareItem, onDismiss: { shareItem = nil }, content: { item in
             ActivityView(activityItems: [item.image])
-        }
+        })
     }
 
     private var backgroundGeneratorSection: some View {
