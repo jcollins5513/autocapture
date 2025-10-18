@@ -83,7 +83,8 @@ final class BackgroundGenerationService {
         let payload: [String: Any] = [
             "model": "gpt-image-1",
             "prompt": prompt,
-            "size": size(for: aspectRatio)
+            "size": size(for: aspectRatio),
+            "response_format": "b64_json"
         ]
 
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -153,7 +154,7 @@ final class BackgroundGenerationService {
     private func imageData(from item: BackgroundGenerationAPIResponse.Item) async throws -> Data {
         if let base64 = item.base64JSON?.trimmingCharacters(in: .whitespacesAndNewlines),
            base64.isEmpty == false,
-           let data = Data(base64Encoded: base64) {
+           let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) {
             return data
         }
 
