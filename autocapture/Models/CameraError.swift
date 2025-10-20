@@ -12,6 +12,7 @@ enum CameraError: LocalizedError {
     case photoCaptureFailed
     case backgroundRemovalFailed
     case noSubjectDetected
+    case multipleSubjectsDetected
     case unauthorized
 
     var errorDescription: String? {
@@ -24,6 +25,8 @@ enum CameraError: LocalizedError {
             return "Failed to remove background"
         case .noSubjectDetected:
             return "No clear subject detected in photo. Please try again with a clearer subject."
+        case .multipleSubjectsDetected:
+            return "Multiple subjects detected. Switch to Multi mode or capture a single subject to continue."
         case .unauthorized:
             return "Camera access not authorized. Please enable in Settings."
         }
