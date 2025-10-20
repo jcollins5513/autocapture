@@ -13,10 +13,13 @@ struct CameraView: View {
     @StateObject private var viewModel = CameraViewModel()
     @Environment(\.modelContext)
     private var modelContext
+    @AppStorage("capture.subjectMode")
+    private var storedSubjectModeRawValue = CaptureSubjectMode.singleSubject.rawValue
     @State private var showGallery = false
     @State private var baseZoomFactor: CGFloat = 1.0
     private let session: CaptureSession?
     @State private var subjectDescription: String = ""
+    @State private var selectedSubjectMode: CaptureSubjectMode = .singleSubject
 
     init(session: CaptureSession? = nil) {
         self._viewModel = StateObject(wrappedValue: CameraViewModel())
@@ -45,6 +48,9 @@ struct CameraView: View {
         .task {
             viewModel.setModelContext(modelContext)
             viewModel.setActiveSession(session)
+            let initialMode = CaptureSubjectMode(rawValue: storedSubjectModeRawValue) ?? .singleSubject
+            selectedSubjectMode = initialMode
+            viewModel.subjectMode = initialMode
             await viewModel.setupCamera()
             subjectDescription = viewModel.subjectDescription
         }
@@ -53,6 +59,10 @@ struct CameraView: View {
         }
         .onChange(of: subjectDescription) { _, newValue in
             viewModel.subjectDescription = newValue
+        }
+        .onChange(of: selectedSubjectMode) { _, newValue in
+            storedSubjectModeRawValue = newValue.rawValue
+            viewModel.subjectMode = newValue
         }
     }
 
@@ -88,7 +98,7 @@ struct CameraView: View {
     }
 
     private var topControls: some View {
-        HStack {
+        HStack(alignment: .top) {
             if let session {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Stock: \(session.stockNumber)")
@@ -113,7 +123,11 @@ struct CameraView: View {
                 .transition(.opacity)
             }
             Spacer()
-            galleryButton
+            VStack(alignment: .trailing, spacing: 12) {
+                subjectModePicker
+                galleryButton
+            }
+            .padding(.trailing)
         }
     }
 
@@ -154,11 +168,41 @@ struct CameraView: View {
                 Image(systemName: "photo.on.rectangle.angled")
                     .font(.system(size: 24))
                     .foregroundColor(.white)
-                    .padding()
                     .background(Circle().fill(.black.opacity(0.5)))
             }
         )
-        .padding()
+    }
+
+    private var subjectModePicker: some View {
+        Menu {
+            ForEach(CaptureSubjectMode.allCases) { mode in
+                Button {
+                    selectedSubjectMode = mode
+                } label: {
+                    Label(mode.subtitle, systemImage: mode.iconName)
+                        .labelStyle(.titleAndIcon)
+                        .font(.subheadline)
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: selectedSubjectMode.iconName)
+                    .font(.system(size: 16, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedSubjectMode.displayName)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                    Text(selectedSubjectMode.description)
+                        .font(.caption2)
+                        .opacity(0.85)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.black.opacity(0.35))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .foregroundColor(.white)
+        }
     }
 
     private var flashButton: some View {

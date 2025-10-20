@@ -14,6 +14,7 @@ struct ImageDetailView: View {
     @Environment(\.modelContext)
     private var modelContext
     let image: ProcessedImage
+    @State private var showCleanupSheet = false
 
     var body: some View {
         NavigationStack {
@@ -35,7 +36,16 @@ struct ImageDetailView: View {
                     .foregroundColor(.white)
                 }
 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    if image.maskImage != nil, image.originalImage != nil {
+                        Button {
+                            showCleanupSheet = true
+                        } label: {
+                            Image(systemName: "wand.and.stars")
+                                .foregroundColor(.white)
+                        }
+                    }
+
                     Button(role: .destructive) {
                         deleteImage()
                     } label: {
@@ -46,6 +56,9 @@ struct ImageDetailView: View {
             }
             .toolbarBackground(.black.opacity(0.5), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+            .sheet(isPresented: $showCleanupSheet) {
+                EdgeCleanupView(image: image)
+            }
         }
     }
 

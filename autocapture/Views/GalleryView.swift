@@ -68,14 +68,17 @@ struct GalleryView: View {
         LazyVGrid(columns: columns, spacing: 2) {
             ForEach(images) { image in
                 if let uiImage = image.image {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: size, height: size)
-                        .clipped()
-                        .onTapGesture {
-                            selectedImage = image
-                        }
+                    Button {
+                        selectedImage = image
+                    } label: {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: size, height: size)
+                            .clipped()
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
                 }
             }
         }

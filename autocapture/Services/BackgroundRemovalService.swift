@@ -10,13 +10,19 @@ import CoreImage
 import UIKit
 import Vision
 
+struct ForegroundExtractionResult {
+    let foregroundImage: UIImage
+    let maskImage: UIImage
+    let originalImage: UIImage
+}
+
 class BackgroundRemovalService {
     private let context = CIContext(options: [
         .useSoftwareRenderer: false,
         .priorityRequestLow: false
     ])
 
-    func removeBackground(from image: UIImage) async throws -> UIImage {
+    func extractForeground(from image: UIImage, allowMultipleSubjects: Bool) async throws -> ForegroundExtractionResult {
         guard let cgImage = image.cgImage else {
             throw CameraError.backgroundRemovalFailed
         }
@@ -34,8 +40,19 @@ class BackgroundRemovalService {
             throw CameraError.noSubjectDetected
         }
 
+        let instances = result.allInstances
+        let instanceCount = instances.count
+
+        guard instanceCount > 0 else {
+            throw CameraError.noSubjectDetected
+        }
+
+        if !allowMultipleSubjects, instanceCount > 1 {
+            throw CameraError.multipleSubjectsDetected
+        }
+
         // Get the pixel buffer from the observation
-        let maskPixelBuffer = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
+        let maskPixelBuffer = try result.generateScaledMaskForImage(forInstances: instances, from: handler)
 
         // Convert mask to CIImage
         var maskImage = CIImage(cvPixelBuffer: maskPixelBuffer)
@@ -50,6 +67,38 @@ class BackgroundRemovalService {
         let compositedImage = try applyMaskWithFeathering(mask: maskImage, to: originalImage)
 
         // Convert back to UIImage
+        guard let outputCGImage = context.createCGImage(compositedImage, from: compositedImage.extent) else {
+            throw CameraError.backgroundRemovalFailed
+        }
+
+        guard let maskCGImage = context.createCGImage(maskImage, from: maskImage.extent) else {
+            throw CameraError.backgroundRemovalFailed
+        }
+
+        let foregroundImage = UIImage(cgImage: outputCGImage, scale: image.scale, orientation: image.imageOrientation)
+        let maskUIImage = UIImage(cgImage: maskCGImage, scale: image.scale, orientation: image.imageOrientation)
+
+        return ForegroundExtractionResult(
+            foregroundImage: foregroundImage,
+            maskImage: maskUIImage,
+            originalImage: image
+        )
+    }
+
+    func apply(mask: UIImage, to image: UIImage) throws -> UIImage {
+        guard let maskCGImage = mask.cgImage else {
+            throw CameraError.backgroundRemovalFailed
+        }
+
+        guard let maskCIImage = CIImage(cgImage: maskCGImage).clampedToExtent(),
+              let originalCGImage = image.cgImage else {
+            throw CameraError.backgroundRemovalFailed
+        }
+
+        let originalCIImage = CIImage(cgImage: originalCGImage)
+
+        let compositedImage = try applyMaskWithFeathering(mask: maskCIImage, to: originalCIImage)
+
         guard let outputCGImage = context.createCGImage(compositedImage, from: compositedImage.extent) else {
             throw CameraError.backgroundRemovalFailed
         }

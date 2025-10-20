@@ -22,6 +22,7 @@ class CameraViewModel: ObservableObject {
     @Published var currentZoomFactor: CGFloat = 1.0
     @Published var activeSession: CaptureSession?
     @Published var subjectDescription: String = ""
+    @Published var subjectMode: CaptureSubjectMode = .singleSubject
 
     private var modelContext: ModelContext?
 
@@ -80,11 +81,34 @@ class CameraViewModel: ObservableObject {
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
 
-            // Remove background
-            let processedImage = try await backgroundRemovalService.removeBackground(from: photo)
-
-            // Save to data store
-            saveProcessedImage(processedImage)
+            switch subjectMode {
+            case .singleSubject:
+                let result = try await backgroundRemovalService.extractForeground(from: photo, allowMultipleSubjects: false)
+                saveProcessedImage(
+                    result.foregroundImage,
+                    isSubjectLifted: true,
+                    captureMode: .singleSubject,
+                    originalImage: result.originalImage,
+                    maskImage: result.maskImage
+                )
+            case .multiSubject:
+                let result = try await backgroundRemovalService.extractForeground(from: photo, allowMultipleSubjects: true)
+                saveProcessedImage(
+                    result.foregroundImage,
+                    isSubjectLifted: true,
+                    captureMode: .multiSubject,
+                    originalImage: result.originalImage,
+                    maskImage: result.maskImage
+                )
+            case .fullScene:
+                saveProcessedImage(
+                    photo,
+                    isSubjectLifted: false,
+                    captureMode: .fullScene,
+                    originalImage: nil,
+                    maskImage: nil
+                )
+            }
 
             isProcessing = false
         } catch let error as CameraError {
@@ -130,14 +154,24 @@ class CameraViewModel: ObservableObject {
         cameraService.stopSession()
     }
 
-    private func saveProcessedImage(_ image: UIImage) {
+    private func saveProcessedImage(
+        _ image: UIImage,
+        isSubjectLifted: Bool,
+        captureMode: CaptureSubjectMode,
+        originalImage: UIImage?,
+        maskImage: UIImage?
+    ) {
         guard let context = modelContext else { return }
 
         let processedImage = ProcessedImage(
             image: image,
             subjectDescription: subjectDescription,
             backgroundCategory: activeSession?.primaryCategory,
-            session: activeSession
+            session: activeSession,
+            isSubjectLifted: isSubjectLifted,
+            captureMode: captureMode,
+            originalImage: originalImage,
+            maskImage: maskImage
         )
 
         if let session = activeSession {
