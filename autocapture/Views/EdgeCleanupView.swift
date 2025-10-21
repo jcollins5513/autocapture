@@ -5,6 +5,7 @@
 //  Created by OpenAI Assistant on 10/17/25.
 //
 
+import Combine
 import SwiftData
 import SwiftUI
 import UIKit
@@ -51,7 +52,7 @@ final class EdgeCleanupViewModel: ObservableObject {
         self.processedImage = image
     }
 
-    func applyStroke(at point: CGPoint, brushSize: CGFloat, mode: MaskEditingMode) {
+    fileprivate func applyStroke(at point: CGPoint, brushSize: CGFloat, mode: MaskEditingMode) {
         let rendererFormat = UIGraphicsImageRendererFormat.default()
         rendererFormat.scale = maskImage.scale
         let renderer = UIGraphicsImageRenderer(size: maskImage.size, format: rendererFormat)
@@ -92,8 +93,10 @@ final class EdgeCleanupViewModel: ObservableObject {
 }
 
 struct EdgeCleanupView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss)
+    private var dismiss
+    @Environment(\.modelContext)
+    private var modelContext
     @StateObject private var viewModel: EdgeCleanupViewModel
     @State private var brushSize: CGFloat = 40
     @State private var editingMode: MaskEditingMode = .add
@@ -109,40 +112,7 @@ struct EdgeCleanupView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-
-                VStack(spacing: 24) {
-                    cleanupCanvas
-                    editingControls
-                }
-                .padding()
-            }
-            .navigationTitle("Clean Edges")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Apply") {
-                        applyChanges()
-                    }
-                    .disabled(modelContext == nil)
-                }
-            }
-            .alert("Unable to save", isPresented: $isShowingError) {
-                Button("OK", role: .cancel) {
-                    errorMessage = nil
-                }
-            } message: {
-                if let errorMessage {
-                    Text(errorMessage)
-                }
-            }
+            cleanupLayout
         }
     }
 
@@ -158,6 +128,42 @@ struct EdgeCleanupView: View {
         }
         .aspectRatio(previewAspectRatio, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var cleanupLayout: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            VStack(spacing: 24) {
+                cleanupCanvas
+                editingControls
+            }
+            .padding()
+        }
+        .navigationTitle("Clean Edges")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    dismiss()
+                }
+            }
+
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Apply") {
+                    applyChanges()
+                }
+            }
+        }
+        .alert("Unable to save", isPresented: $isShowingError) {
+            Button("OK", role: .cancel) {
+                errorMessage = nil
+            }
+        } message: {
+            if let errorMessage {
+                Text(errorMessage)
+            }
+        }
     }
 
     private func drawingGesture(in geometry: GeometryProxy) -> some Gesture {
@@ -226,36 +232,31 @@ struct EdgeCleanupView: View {
     @ViewBuilder
     private func checkerboardBackground(in size: CGSize) -> some View {
         let tileSize: CGFloat = 20
-        Canvas { context, _ in
-            let columns = Int(ceil(size.width / tileSize))
-            let rows = Int(ceil(size.height / tileSize))
-
-            for row in 0..<rows {
-                for column in 0..<columns {
-                    if (row + column).isMultiple(of: 2) {
-                        let rect = CGRect(
-                            x: CGFloat(column) * tileSize,
-                            y: CGFloat(row) * tileSize,
-                            width: tileSize,
-                            height: tileSize
-                        )
-                        context.fill(Path(rect), with: .color(Color(.systemGray5)))
-                    }
-                }
-            }
+        Canvas { context, canvasSize in
+            drawCheckerboard(context: context, canvasSize: canvasSize, tileSize: tileSize)
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private func applyChanges() {
-        guard let context = modelContext else {
-            errorMessage = "Missing data context."
-            isShowingError = true
-            return
-        }
+    private func drawCheckerboard(context: GraphicsContext, canvasSize: CGSize, tileSize: CGFloat) {
+        let columns = Int(ceil(canvasSize.width / tileSize))
+        let rows = Int(ceil(canvasSize.height / tileSize))
 
+        for row in 0..<rows {
+            for column in 0..<columns where (row + column).isMultiple(of: 2) {
+                let origin = CGPoint(
+                    x: CGFloat(column) * tileSize,
+                    y: CGFloat(row) * tileSize
+                )
+                let rect = CGRect(origin: origin, size: CGSize(width: tileSize, height: tileSize))
+                context.fill(Path(rect), with: .color(Color(.systemGray5)))
+            }
+        }
+    }
+
+    private func applyChanges() {
         do {
-            try viewModel.commitChanges(context: context)
+            try viewModel.commitChanges(context: modelContext)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -271,25 +272,32 @@ struct EdgeCleanupView: View {
 }
 
 #Preview {
-    let container = try! ModelContainer(for: ProcessedImage.self, configurations: .init(isStoredInMemoryOnly: true))
-    let context = container.mainContext
-    let sampleImage = UIImage(systemName: "car.fill")!
-    let maskRenderer = UIGraphicsImageRenderer(size: sampleImage.size)
-    let whiteMask = maskRenderer.image { ctx in
-        UIColor.white.setFill()
-        ctx.fill(CGRect(origin: .zero, size: sampleImage.size))
+    do {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: ProcessedImage.self, configurations: configuration)
+        let context = container.mainContext
+        let sampleImage = UIImage(systemName: "car.fill") ?? UIImage()
+        let maskRenderer = UIGraphicsImageRenderer(size: sampleImage.size)
+        let whiteMask = maskRenderer.image { ctx in
+            UIColor.white.setFill()
+            ctx.fill(CGRect(origin: .zero, size: sampleImage.size))
+        }
+        let processed = ProcessedImage(
+            image: sampleImage,
+            captureDate: Date(),
+            subjectDescription: "Sample",
+            isSubjectLifted: true,
+            captureMode: .singleSubject,
+            originalImage: sampleImage,
+            maskImage: whiteMask
+        )
+        context.insert(processed)
+        try context.save()
+        return EdgeCleanupView(image: processed)
+            .modelContainer(container)
+    } catch {
+        return NavigationStack {
+            Text("Preview unavailable")
+        }
     }
-    let processed = ProcessedImage(
-        image: sampleImage,
-        captureDate: Date(),
-        subjectDescription: "Sample",
-        isSubjectLifted: true,
-        captureMode: .singleSubject,
-        originalImage: sampleImage,
-        maskImage: whiteMask
-    )
-    context.insert(processed)
-    try? context.save()
-    return EdgeCleanupView(image: processed)
-        .modelContainer(container)
 }
