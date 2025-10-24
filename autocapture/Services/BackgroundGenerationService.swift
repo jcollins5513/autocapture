@@ -10,16 +10,47 @@ import UIKit
 
 private struct BackgroundGenerationAPIResponse: Decodable {
     struct Item: Decodable {
-        let base64JSON: String?
+        let b64_json: String?
         let url: String?
+    }
 
-        enum CodingKeys: String, CodingKey {
-            case base64JSON = "b64_json"
-            case url
+    enum DataItem: Decodable {
+        case string(String)
+        case item(Item)
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let str = try? container.decode(String.self) {
+                self = .string(str)
+            } else if let obj = try? container.decode(Item.self) {
+                self = .item(obj)
+            } else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unsupported data item format"))
+            }
+        }
+
+        /// Extract base64 string if present
+        var base64: String? {
+            switch self {
+            case .string(let str):
+                return str
+            case .item(let item):
+                return item.b64_json
+            }
+        }
+
+        /// Extract URL string if present
+        var urlString: String? {
+            switch self {
+            case .string:
+                return nil
+            case .item(let item):
+                return item.url
+            }
         }
     }
 
-    let data: [Item]
+    let data: [DataItem]
 }
 
 @MainActor
@@ -83,8 +114,7 @@ final class BackgroundGenerationService {
         let payload: [String: Any] = [
             "model": "gpt-image-1",
             "prompt": prompt,
-            "size": size(for: aspectRatio),
-            "response_format": "b64_json"
+            "size": size(for: aspectRatio)
         ]
 
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -110,14 +140,13 @@ final class BackgroundGenerationService {
         }
 
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         let apiResponse = try decoder.decode(BackgroundGenerationAPIResponse.self, from: data)
 
-        guard let item = apiResponse.data.first else {
+        guard let first = apiResponse.data.first else {
             throw GenerationError.invalidResponse
         }
 
-        let imageData = try await imageData(from: item)
+        let imageData = try await imageData(from: first)
 
         let generatedBackground = GeneratedBackground(
             prompt: prompt,
@@ -151,14 +180,14 @@ final class BackgroundGenerationService {
         }
     }
 
-    private func imageData(from item: BackgroundGenerationAPIResponse.Item) async throws -> Data {
-        if let base64 = item.base64JSON?.trimmingCharacters(in: .whitespacesAndNewlines),
+    private func imageData(from item: BackgroundGenerationAPIResponse.DataItem) async throws -> Data {
+        if let base64 = item.base64?.trimmingCharacters(in: .whitespacesAndNewlines),
            base64.isEmpty == false,
            let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) {
             return data
         }
 
-        if let urlString = item.url, let url = URL(string: urlString) {
+        if let urlString = item.urlString, let url = URL(string: urlString) {
             let (data, response) = try await urlSession.data(from: url)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 throw GenerationError.invalidResponse

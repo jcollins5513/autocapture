@@ -6,8 +6,10 @@
 //
 
 import AVFoundation
+import PhotosUI
 import SwiftData
 import SwiftUI
+import UIKit
 
 struct CameraView: View {
     @StateObject private var viewModel = CameraViewModel()
@@ -16,6 +18,9 @@ struct CameraView: View {
     @AppStorage("capture.subjectMode")
     private var storedSubjectModeRawValue = CaptureSubjectMode.singleSubject.rawValue
     @State private var showGallery = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var pendingImportImage: UIImage?
+    @State private var showImportOptions = false
     @State private var baseZoomFactor: CGFloat = 1.0
     private let session: CaptureSession?
     @State private var subjectDescription: String = ""
@@ -34,6 +39,27 @@ struct CameraView: View {
         }
         .sheet(isPresented: $showGallery) {
             GalleryView()
+        }
+        .onChange(of: selectedPhotoItem) { _, newValue in
+            guard let item = newValue else { return }
+            handleSelectedPhoto(item)
+        }
+        .confirmationDialog(
+            "Import Photo",
+            isPresented: $showImportOptions,
+            titleVisibility: .visible
+        ) {
+            Button("Lift Subject") {
+                importPendingImage(applyBackgroundRemoval: true)
+            }
+            Button("Keep Background") {
+                importPendingImage(applyBackgroundRemoval: false)
+            }
+            Button("Cancel", role: .cancel) {
+                resetPendingImport()
+            }
+        } message: {
+            Text("Choose whether to automatically remove the background or keep the original image.")
         }
         .alert("Error", isPresented: $viewModel.showError) {
             Button("Retake", role: .cancel) {
@@ -125,7 +151,10 @@ struct CameraView: View {
             Spacer()
             VStack(alignment: .trailing, spacing: 12) {
                 subjectModePicker
-                galleryButton
+                HStack(spacing: 12) {
+                    importButton
+                    galleryButton
+                }
             }
             .padding(.trailing)
         }
@@ -171,6 +200,16 @@ struct CameraView: View {
                     .background(Circle().fill(.black.opacity(0.5)))
             }
         )
+    }
+
+    private var importButton: some View {
+        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+            Image(systemName: "square.and.arrow.down")
+                .font(.system(size: 24))
+                .foregroundColor(.white)
+                .background(Circle().fill(.black.opacity(0.5)))
+        }
+        .buttonStyle(.plain)
     }
 
     private var subjectModePicker: some View {
@@ -281,6 +320,63 @@ struct CameraView: View {
         @unknown default:
             return "Auto"
         }
+    }
+}
+
+private extension CameraView {
+    func handleSelectedPhoto(_ item: PhotosPickerItem) {
+        Task {
+            await loadPhoto(item)
+        }
+    }
+
+    @MainActor
+    func importPendingImage(applyBackgroundRemoval: Bool) {
+        guard let image = pendingImportImage else { return }
+        pendingImportImage = nil
+        showImportOptions = false
+
+        Task {
+            await viewModel.importImageFromLibrary(image, removeBackground: applyBackgroundRemoval)
+        }
+    }
+
+    @MainActor
+    func resetPendingImport() {
+        pendingImportImage = nil
+        showImportOptions = false
+        selectedPhotoItem = nil
+    }
+
+    func loadPhoto(_ item: PhotosPickerItem) async {
+        do {
+            if let data = try await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data) {
+                await MainActor.run {
+                    pendingImportImage = image
+                    showImportOptions = true
+                }
+            } else {
+                await MainActor.run {
+                    presentImportError("Unable to load selected photo.")
+                }
+            }
+        } catch {
+            await MainActor.run {
+                presentImportError(error.localizedDescription)
+            }
+        }
+
+        await MainActor.run {
+            selectedPhotoItem = nil
+        }
+    }
+
+    @MainActor
+    func presentImportError(_ message: String) {
+        viewModel.errorMessage = message
+        viewModel.showError = true
+        resetPendingImport()
     }
 }
 

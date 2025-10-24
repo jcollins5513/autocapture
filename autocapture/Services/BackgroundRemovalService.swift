@@ -85,13 +85,19 @@ class BackgroundRemovalService {
         )
     }
 
+    func removeBackground(from image: UIImage, allowMultipleSubjects: Bool = true) async throws -> UIImage {
+        let result = try await extractForeground(from: image, allowMultipleSubjects: allowMultipleSubjects)
+        return result.foregroundImage
+    }
+
     func apply(mask: UIImage, to image: UIImage) throws -> UIImage {
         guard let maskCGImage = mask.cgImage else {
             throw CameraError.backgroundRemovalFailed
         }
 
-        guard let maskCIImage = CIImage(cgImage: maskCGImage).clampedToExtent(),
-              let originalCGImage = image.cgImage else {
+        let maskCIImage = CIImage(cgImage: maskCGImage).clampedToExtent()
+
+        guard let originalCGImage = image.cgImage else {
             throw CameraError.backgroundRemovalFailed
         }
 

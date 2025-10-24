@@ -120,6 +120,50 @@ class CameraViewModel: ObservableObject {
         }
     }
 
+    func importImageFromLibrary(_ image: UIImage, removeBackground: Bool) async {
+        guard !isProcessing else { return }
+
+        isProcessing = true
+        defer { isProcessing = false }
+
+        do {
+            if removeBackground {
+                let selectedMode: CaptureSubjectMode
+                if subjectMode == .fullScene {
+                    selectedMode = .singleSubject
+                } else {
+                    selectedMode = subjectMode
+                }
+
+                let allowMultipleSubjects = selectedMode == .multiSubject
+                let result = try await backgroundRemovalService.extractForeground(
+                    from: image,
+                    allowMultipleSubjects: allowMultipleSubjects
+                )
+
+                saveProcessedImage(
+                    result.foregroundImage,
+                    isSubjectLifted: true,
+                    captureMode: selectedMode,
+                    originalImage: result.originalImage,
+                    maskImage: result.maskImage
+                )
+            } else {
+                saveProcessedImage(
+                    image,
+                    isSubjectLifted: false,
+                    captureMode: .fullScene,
+                    originalImage: nil,
+                    maskImage: nil
+                )
+            }
+        } catch let error as CameraError {
+            handleError(error)
+        } catch {
+            handleError(CameraError.backgroundRemovalFailed)
+        }
+    }
+
     func toggleFlash() {
         switch flashMode {
         case .auto:

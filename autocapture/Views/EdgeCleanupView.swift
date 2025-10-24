@@ -5,11 +5,12 @@
 //  Created by OpenAI Assistant on 10/17/25.
 //
 
+import Combine
 import SwiftData
 import SwiftUI
 import UIKit
 
-private enum MaskEditingMode: String, CaseIterable, Identifiable {
+enum MaskEditingMode: String, CaseIterable, Identifiable {
     case add
     case erase
 
@@ -52,11 +53,13 @@ final class EdgeCleanupViewModel: ObservableObject {
     }
 
     func applyStroke(at point: CGPoint, brushSize: CGFloat, mode: MaskEditingMode) {
-        let rendererFormat = UIGraphicsImageRendererFormat.default()
+        let rendererFormat = UIGraphicsImageRendererFormat()
         rendererFormat.scale = maskImage.scale
+        rendererFormat.opaque = false
+
         let renderer = UIGraphicsImageRenderer(size: maskImage.size, format: rendererFormat)
         let radius = brushSize / 2
-        let rect = CGRect(
+        let strokeRect = CGRect(
             x: point.x - radius,
             y: point.y - radius,
             width: brushSize,
@@ -65,9 +68,9 @@ final class EdgeCleanupViewModel: ObservableObject {
 
         let updatedMask = renderer.image { ctx in
             maskImage.draw(in: CGRect(origin: .zero, size: maskImage.size))
-            ctx.cgContext.setFillColor(mode == .add ? UIColor.white.cgColor : UIColor.black.cgColor)
-            ctx.cgContext.setBlendMode(.normal)
-            ctx.cgContext.fillEllipse(in: rect)
+            ctx.cgContext.setShouldAntialias(true)
+            ctx.cgContext.setFillColor((mode == .add ? UIColor.white : UIColor.black).cgColor)
+            ctx.cgContext.fillEllipse(in: strokeRect)
         }
 
         maskImage = updatedMask
@@ -92,8 +95,10 @@ final class EdgeCleanupViewModel: ObservableObject {
 }
 
 struct EdgeCleanupView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss)
+    private var dismiss
+    @Environment(\.modelContext)
+    private var modelContext
     @StateObject private var viewModel: EdgeCleanupViewModel
     @State private var brushSize: CGFloat = 40
     @State private var editingMode: MaskEditingMode = .add
@@ -160,23 +165,37 @@ struct EdgeCleanupView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
+    private struct ImageCoordinate {
+        let point: CGPoint
+        let scale: CGFloat
+    }
+
     private func drawingGesture(in geometry: GeometryProxy) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard let point = imagePoint(from: value.location, in: geometry) else { return }
-                viewModel.applyStroke(at: point, brushSize: brushSize, mode: editingMode)
+                guard let mapping = imageCoordinate(from: value.location, in: geometry) else { return }
+                viewModel.applyStroke(
+                    at: mapping.point,
+                    brushSize: brushSizeInImageSpace(for: mapping.scale),
+                    mode: editingMode
+                )
             }
             .onEnded { value in
-                guard let point = imagePoint(from: value.location, in: geometry) else { return }
-                viewModel.applyStroke(at: point, brushSize: brushSize, mode: editingMode)
+                guard let mapping = imageCoordinate(from: value.location, in: geometry) else { return }
+                viewModel.applyStroke(
+                    at: mapping.point,
+                    brushSize: brushSizeInImageSpace(for: mapping.scale),
+                    mode: editingMode
+                )
             }
     }
 
-    private func imagePoint(from location: CGPoint, in geometry: GeometryProxy) -> CGPoint? {
+    private func imageCoordinate(from location: CGPoint, in geometry: GeometryProxy) -> ImageCoordinate? {
         let imageSize = viewModel.previewImage.size
         guard imageSize.width > 0, imageSize.height > 0 else { return nil }
 
         let scale = min(geometry.size.width / imageSize.width, geometry.size.height / imageSize.height)
+        guard scale > 0 else { return nil }
         let renderedSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
         let origin = CGPoint(
             x: (geometry.size.width - renderedSize.width) / 2,
@@ -189,7 +208,13 @@ struct EdgeCleanupView: View {
         let normalizedX = (location.x - origin.x) / scale
         let normalizedY = (location.y - origin.y) / scale
 
-        return CGPoint(x: normalizedX, y: normalizedY)
+        return ImageCoordinate(point: CGPoint(x: normalizedX, y: normalizedY), scale: scale)
+    }
+
+    private func brushSizeInImageSpace(for scale: CGFloat) -> CGFloat {
+        guard scale > 0 else { return brushSize }
+        let adjusted = brushSize / scale
+        return max(adjusted, 1)
     }
 
     private var editingControls: some View {
@@ -231,16 +256,14 @@ struct EdgeCleanupView: View {
             let rows = Int(ceil(size.height / tileSize))
 
             for row in 0..<rows {
-                for column in 0..<columns {
-                    if (row + column).isMultiple(of: 2) {
-                        let rect = CGRect(
-                            x: CGFloat(column) * tileSize,
-                            y: CGFloat(row) * tileSize,
-                            width: tileSize,
-                            height: tileSize
-                        )
-                        context.fill(Path(rect), with: .color(Color(.systemGray5)))
-                    }
+                for column in 0..<columns where (row + column).isMultiple(of: 2) {
+                    let rect = CGRect(
+                        x: CGFloat(column) * tileSize,
+                        y: CGFloat(row) * tileSize,
+                        width: tileSize,
+                        height: tileSize
+                    )
+                    context.fill(Path(rect), with: .color(Color(.systemGray5)))
                 }
             }
         }
@@ -248,14 +271,8 @@ struct EdgeCleanupView: View {
     }
 
     private func applyChanges() {
-        guard let context = modelContext else {
-            errorMessage = "Missing data context."
-            isShowingError = true
-            return
-        }
-
         do {
-            try viewModel.commitChanges(context: context)
+            try viewModel.commitChanges(context: modelContext)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -271,25 +288,41 @@ struct EdgeCleanupView: View {
 }
 
 #Preview {
-    let container = try! ModelContainer(for: ProcessedImage.self, configurations: .init(isStoredInMemoryOnly: true))
-    let context = container.mainContext
-    let sampleImage = UIImage(systemName: "car.fill")!
-    let maskRenderer = UIGraphicsImageRenderer(size: sampleImage.size)
-    let whiteMask = maskRenderer.image { ctx in
-        UIColor.white.setFill()
-        ctx.fill(CGRect(origin: .zero, size: sampleImage.size))
+    EdgeCleanupPreviewFactory.makePreview()
+}
+
+private enum EdgeCleanupPreviewFactory {
+    static func makePreview() -> some View {
+        guard let container = try? ModelContainer(
+            for: ProcessedImage.self,
+            configurations: .init(isStoredInMemoryOnly: true)
+        ),
+        let sampleImage = UIImage(systemName: "car.fill") else {
+            return AnyView(Text("Preview unavailable"))
+        }
+
+        let maskRenderer = UIGraphicsImageRenderer(size: sampleImage.size)
+        let whiteMask = maskRenderer.image { ctx in
+            UIColor.white.setFill()
+            ctx.fill(CGRect(origin: .zero, size: sampleImage.size))
+        }
+
+        let processed = ProcessedImage(
+            image: sampleImage,
+            captureDate: Date(),
+            subjectDescription: "Sample",
+            isSubjectLifted: true,
+            captureMode: .singleSubject,
+            originalImage: sampleImage,
+            maskImage: whiteMask
+        )
+
+        container.mainContext.insert(processed)
+        try? container.mainContext.save()
+
+        return AnyView(
+            EdgeCleanupView(image: processed)
+                .modelContainer(container)
+        )
     }
-    let processed = ProcessedImage(
-        image: sampleImage,
-        captureDate: Date(),
-        subjectDescription: "Sample",
-        isSubjectLifted: true,
-        captureMode: .singleSubject,
-        originalImage: sampleImage,
-        maskImage: whiteMask
-    )
-    context.insert(processed)
-    try? context.save()
-    return EdgeCleanupView(image: processed)
-        .modelContainer(container)
 }
