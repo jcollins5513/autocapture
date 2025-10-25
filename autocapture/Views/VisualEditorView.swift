@@ -42,6 +42,7 @@ struct VisualEditorView: View {
     @State private var pendingImportImage: UIImage?
     @State private var pendingImportSource: ImportSource?
     @State private var showImportOptions = false
+    @State private var showWebBackgroundWorkflow = false
 
     init(project: CompositionProject, session: CaptureSession, selectedImageIDs: Set<UUID>) {
         self._project = Bindable(project)
@@ -169,6 +170,9 @@ struct VisualEditorView: View {
                 )
             }
         }
+        .sheet(isPresented: $showWebBackgroundWorkflow) {
+            BackgroundRemovalWebWorkflowView()
+        }
         .sheet(item: $shareItem, onDismiss: { shareItem = nil }, content: { item in
             ActivityView(activityItems: [item.image])
         })
@@ -190,6 +194,14 @@ struct VisualEditorView: View {
                 }
                 .buttonStyle(.bordered)
             }
+            Button {
+                showWebBackgroundWorkflow = true
+            } label: {
+                Label("Open Web Background Lab", systemImage: "sparkles.tv")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
             generatedBackgroundCarousel
         }
     }
