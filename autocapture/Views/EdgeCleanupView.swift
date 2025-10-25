@@ -13,6 +13,7 @@ import UIKit
 enum MaskEditingMode: String, CaseIterable, Identifiable {
     case add
     case erase
+    case lasso
 
     var id: String { rawValue }
 
@@ -22,6 +23,8 @@ enum MaskEditingMode: String, CaseIterable, Identifiable {
             return "Restore"
         case .erase:
             return "Erase"
+        case .lasso:
+            return "Lasso Erase"
         }
     }
 
@@ -31,6 +34,8 @@ enum MaskEditingMode: String, CaseIterable, Identifiable {
             return "paintbrush.pointed"
         case .erase:
             return "eraser"
+        case .lasso:
+            return "lasso"
         }
     }
 }
@@ -41,6 +46,9 @@ final class EdgeCleanupViewModel: ObservableObject {
     let originalImage: UIImage
     private let backgroundRemovalService = BackgroundRemovalService()
     private let processedImage: ProcessedImage
+    private var maskHistory: [UIImage] = []
+    private let maxUndoStates = 15
+    @Published private(set) var canUndo = false
 
     init?(image: ProcessedImage) {
         guard let original = image.originalImage, let mask = image.maskImage, let foreground = image.image else {
@@ -52,7 +60,22 @@ final class EdgeCleanupViewModel: ObservableObject {
         self.processedImage = image
     }
 
+    func beginEditingSession() {
+        if maskHistory.count >= maxUndoStates {
+            maskHistory.removeFirst()
+        }
+        maskHistory.append(maskImage)
+        canUndo = true
+    }
+
+    func cancelEditingSession() {
+        guard !maskHistory.isEmpty else { return }
+        maskHistory.removeLast()
+        canUndo = !maskHistory.isEmpty
+    }
+
     func applyStroke(at point: CGPoint, brushSize: CGFloat, mode: MaskEditingMode) {
+        guard mode != .lasso else { return }
         let rendererFormat = UIGraphicsImageRendererFormat()
         rendererFormat.scale = maskImage.scale
         rendererFormat.opaque = false
@@ -74,6 +97,41 @@ final class EdgeCleanupViewModel: ObservableObject {
         }
 
         maskImage = updatedMask
+        updatePreview()
+        canUndo = !maskHistory.isEmpty
+    }
+
+    func applyLasso(with points: [CGPoint]) {
+        guard points.count > 2 else { return }
+
+        let rendererFormat = UIGraphicsImageRendererFormat()
+        rendererFormat.scale = maskImage.scale
+        rendererFormat.opaque = false
+
+        let renderer = UIGraphicsImageRenderer(size: maskImage.size, format: rendererFormat)
+
+        let updatedMask = renderer.image { ctx in
+            maskImage.draw(in: CGRect(origin: .zero, size: maskImage.size))
+
+            ctx.cgContext.setShouldAntialias(true)
+            ctx.cgContext.setFillColor(UIColor.black.cgColor)
+
+            let path = CGMutablePath()
+            path.addLines(between: points)
+            path.closeSubpath()
+            ctx.cgContext.addPath(path)
+            ctx.cgContext.fillPath()
+        }
+
+        maskImage = updatedMask
+        updatePreview()
+        canUndo = !maskHistory.isEmpty
+    }
+
+    func undoLastChange() {
+        guard let previousMask = maskHistory.popLast() else { return }
+        maskImage = previousMask
+        canUndo = !maskHistory.isEmpty
         updatePreview()
     }
 
@@ -104,6 +162,9 @@ struct EdgeCleanupView: View {
     @State private var editingMode: MaskEditingMode = .add
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var isDrawing = false
+    @State private var lassoImagePoints: [CGPoint] = []
+    @State private var lassoViewPoints: [CGPoint] = []
 
     init(image: ProcessedImage) {
         guard let viewModel = EdgeCleanupViewModel(image: image) else {
@@ -148,6 +209,12 @@ struct EdgeCleanupView: View {
                     Text(errorMessage)
                 }
             }
+            .onChange(of: editingMode) { newMode in
+                if newMode != .lasso {
+                    lassoImagePoints = []
+                    lassoViewPoints = []
+                }
+            }
         }
     }
 
@@ -159,34 +226,103 @@ struct EdgeCleanupView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .gesture(drawingGesture(in: geometry))
+                    .overlay(lassoOverlay())
             }
         }
         .aspectRatio(previewAspectRatio, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
+    @ViewBuilder
+    private func lassoOverlay() -> some View {
+        guard editingMode == .lasso, lassoViewPoints.count > 1 else { return }
+
+        let path = Path { path in
+            path.addLines(lassoViewPoints)
+            if let first = lassoViewPoints.first {
+                path.addLine(to: first)
+            }
+        }
+
+        path
+            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+            .overlay(
+                path
+                    .fill(Color.accentColor.opacity(0.1))
+            )
+    }
+
     private struct ImageCoordinate {
         let point: CGPoint
         let scale: CGFloat
+        let origin: CGPoint
     }
 
     private func drawingGesture(in geometry: GeometryProxy) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard let mapping = imageCoordinate(from: value.location, in: geometry) else { return }
-                viewModel.applyStroke(
-                    at: mapping.point,
-                    brushSize: brushSizeInImageSpace(for: mapping.scale),
-                    mode: editingMode
-                )
+                if !isDrawing {
+                    viewModel.beginEditingSession()
+                    isDrawing = true
+                    if editingMode == .lasso {
+                        lassoImagePoints = []
+                        lassoViewPoints = []
+                    }
+                }
+
+                switch editingMode {
+                case .add, .erase:
+                    viewModel.applyStroke(
+                        at: mapping.point,
+                        brushSize: brushSizeInImageSpace(for: mapping.scale),
+                        mode: editingMode
+                    )
+                case .lasso:
+                    lassoImagePoints.append(mapping.point)
+                    let viewPoint = CGPoint(
+                        x: mapping.origin.x + (mapping.point.x * mapping.scale),
+                        y: mapping.origin.y + (mapping.point.y * mapping.scale)
+                    )
+                    lassoViewPoints.append(viewPoint)
+                }
             }
             .onEnded { value in
-                guard let mapping = imageCoordinate(from: value.location, in: geometry) else { return }
-                viewModel.applyStroke(
-                    at: mapping.point,
-                    brushSize: brushSizeInImageSpace(for: mapping.scale),
-                    mode: editingMode
-                )
+                guard isDrawing else { return }
+                defer {
+                    isDrawing = false
+                    lassoImagePoints = []
+                    lassoViewPoints = []
+                }
+
+                guard let mapping = imageCoordinate(from: value.location, in: geometry) else {
+                    if editingMode == .lasso {
+                        viewModel.cancelEditingSession()
+                    }
+                    return
+                }
+
+                switch editingMode {
+                case .add, .erase:
+                    viewModel.applyStroke(
+                        at: mapping.point,
+                        brushSize: brushSizeInImageSpace(for: mapping.scale),
+                        mode: editingMode
+                    )
+                case .lasso:
+                    let finalViewPoint = CGPoint(
+                        x: mapping.origin.x + (mapping.point.x * mapping.scale),
+                        y: mapping.origin.y + (mapping.point.y * mapping.scale)
+                    )
+                    lassoImagePoints.append(mapping.point)
+                    lassoViewPoints.append(finalViewPoint)
+
+                    if lassoImagePoints.count > 2 {
+                        viewModel.applyLasso(with: lassoImagePoints)
+                    } else {
+                        viewModel.cancelEditingSession()
+                    }
+                }
             }
     }
 
@@ -208,7 +344,7 @@ struct EdgeCleanupView: View {
         let normalizedX = (location.x - origin.x) / scale
         let normalizedY = (location.y - origin.y) / scale
 
-        return ImageCoordinate(point: CGPoint(x: normalizedX, y: normalizedY), scale: scale)
+        return ImageCoordinate(point: CGPoint(x: normalizedX, y: normalizedY), scale: scale, origin: origin)
     }
 
     private func brushSizeInImageSpace(for scale: CGFloat) -> CGFloat {
@@ -219,6 +355,18 @@ struct EdgeCleanupView: View {
 
     private var editingControls: some View {
         VStack(spacing: 16) {
+            HStack {
+                Button {
+                    viewModel.undoLastChange()
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!viewModel.canUndo || isDrawing)
+
+                Spacer()
+            }
+
             Picker("Mode", selection: $editingMode) {
                 ForEach(MaskEditingMode.allCases) { mode in
                     Label(mode.label, systemImage: mode.systemImage).tag(mode)
@@ -235,6 +383,7 @@ struct EdgeCleanupView: View {
                         .foregroundColor(.secondary)
                 }
                 Slider(value: $brushSize, in: 10...120)
+                    .disabled(editingMode == .lasso)
             }
 
             Text("Drag directly on the preview to restore or erase edges around your subject.")
@@ -242,6 +391,14 @@ struct EdgeCleanupView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.top, 4)
+                .frame(maxWidth: .infinity)
+
+            if editingMode == .lasso {
+                Text("Draw a loop around the area to remove. The enclosed region will be erased once you lift your finger.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding()
         .background(Color(.secondarySystemBackground).opacity(0.9))
