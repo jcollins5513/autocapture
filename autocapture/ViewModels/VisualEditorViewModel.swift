@@ -30,6 +30,7 @@ final class VisualEditorViewModel: ObservableObject {
 
     private let backgroundGenerationService: BackgroundGenerationService
     private let backgroundRemovalService: BackgroundRemovalService
+    private let overlayCompositor = OverlayCompositor()
     private var modelContext: ModelContext?
 
     init(
@@ -105,7 +106,8 @@ final class VisualEditorViewModel: ObservableObject {
         var updatedExistingIDs = existingIDs
 
         for image in sortedImages where updatedExistingIDs.contains(image.id) == false {
-            guard let uiImage = image.image,
+            let baseImage = image.liftedImage ?? image.image
+            guard let uiImage = baseImage,
                   let data = uiImage.pngData(),
                   data.isEmpty == false else {
                 continue
@@ -329,7 +331,16 @@ final class VisualEditorViewModel: ObservableObject {
 
         do {
             if let processedImage = try context.fetch(descriptor).first {
-                processedImage.imageData = data
+                processedImage.liftedImageData = data
+                if processedImage.isSubjectLifted,
+                   let lifted = UIImage(data: data),
+                   let overlay = processedImage.session?.overlayImage,
+                   let composited = overlayCompositor.composite(subject: lifted, onto: overlay),
+                   let compositedData = composited.pngData() {
+                    processedImage.imageData = compositedData
+                } else {
+                    processedImage.imageData = data
+                }
                 processedImage.captureDate = Date()
                 processedImage.session?.touch()
             }

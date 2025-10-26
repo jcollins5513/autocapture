@@ -5,6 +5,7 @@
 //  Created by OpenAI Assistant on 10/15/25.
 //
 
+import PhotosUI
 import SwiftData
 import SwiftUI
 import UIKit
@@ -20,6 +21,10 @@ struct SessionDetailView: View {
     @State private var editorPresentation: EditorPresentation?
     @State private var captureSelection: Set<UUID> = []
     @State private var selectedStatus: CaptureSession.Status
+    @State private var overlayPickerItem: PhotosPickerItem?
+    @State private var isUpdatingOverlay = false
+    @State private var overlayError: String?
+    @State private var showOverlayError = false
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 12),
@@ -115,12 +120,28 @@ struct SessionDetailView: View {
                 pendingProject = nil
             }
         }
+        .onChange(of: overlayPickerItem) { _, newValue in
+            guard let item = newValue else { return }
+            Task {
+                await loadOverlay(from: item)
+            }
+        }
+        .alert("Overlay Update Failed", isPresented: $showOverlayError) {
+            Button("OK", role: .cancel) {
+                overlayError = nil
+            }
+        } message: {
+            if let overlayError {
+                Text(overlayError)
+            }
+        }
     }
 
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             headerSummary
             headerCategories
+            headerOverlayControls
         }
         .padding(.top, 24)
     }
@@ -163,6 +184,75 @@ struct SessionDetailView: View {
                 }
             }
         }
+    }
+
+    private var headerOverlayControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Marketing Overlay")
+                    .font(.headline)
+                Spacer()
+                if session.overlayImage != nil {
+                    Button(role: .destructive) {
+                        removeOverlay()
+                    } label: {
+                        Label("Remove Overlay", systemImage: "trash")
+                    }
+                    .disabled(isUpdatingOverlay)
+                }
+            }
+
+            overlayPreview
+
+            PhotosPicker(selection: $overlayPickerItem, matching: .images) {
+                Label(
+                    session.overlayImage == nil ? "Select Overlay" : "Replace Overlay",
+                    systemImage: "photo.on.rectangle"
+                )
+                .font(.subheadline)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.12))
+                )
+            }
+            .disabled(isUpdatingOverlay)
+        }
+    }
+
+    @ViewBuilder
+    private var overlayPreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.gray.opacity(0.12))
+
+            if let overlay = session.overlayImage {
+                Image(uiImage: overlay)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(8)
+            } else {
+                VStack(spacing: 8) {
+                    Image(systemName: "photo.on.rectangle")
+                        .font(.title2)
+                    Text("Add a logo or marketing frame to apply to lifted captures in this session.")
+                        .font(.footnote)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 16)
+                }
+                .foregroundStyle(.secondary)
+            }
+
+            if isUpdatingOverlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.black.opacity(0.3))
+                ProgressView()
+                    .tint(.white)
+            }
+        }
+        .frame(height: 160)
     }
 
     private var capturedImagesSection: some View {
@@ -228,6 +318,100 @@ struct SessionDetailView: View {
                     }
                     .padding(.vertical, 4)
                 }
+            }
+        }
+    }
+
+    private func removeOverlay() {
+        guard session.overlayImage != nil else { return }
+        isUpdatingOverlay = true
+        defer { isUpdatingOverlay = false }
+        applyOverlay(nil)
+    }
+
+    private func applyOverlay(_ overlay: UIImage?) {
+        let previousOverlay = session.overlayImage
+        let previousUpdatedAt = session.updatedAt
+        let previousImages = session.images.map { image in
+            (image, image.imageData, image.liftedImageData)
+        }
+
+        applyOverlayToCaptures(using: overlay)
+        session.overlayImage = overlay
+        session.touch()
+
+        do {
+            try modelContext.save()
+        } catch {
+            session.overlayImage = previousOverlay
+            session.updatedAt = previousUpdatedAt
+            for (image, imageData, liftedData) in previousImages {
+                image.imageData = imageData
+                image.liftedImageData = liftedData
+            }
+            presentOverlayError(error.localizedDescription)
+        }
+    }
+
+    private func applyOverlayToCaptures(using overlay: UIImage?) {
+        let compositor = OverlayCompositor()
+
+        for processedImage in session.images where processedImage.isSubjectLifted {
+            let subjectImage = processedImage.liftedImage ?? processedImage.image
+
+            if processedImage.liftedImageData == nil,
+               let subjectImage,
+               let subjectData = subjectImage.pngData() {
+                processedImage.liftedImageData = subjectData
+            }
+
+            guard let subjectImage else { continue }
+
+            if let overlay,
+               let composited = compositor.composite(subject: subjectImage, onto: overlay),
+               let compositedData = composited.pngData() {
+                processedImage.imageData = compositedData
+            } else if let liftedData = processedImage.liftedImageData {
+                processedImage.imageData = liftedData
+            } else if let subjectData = subjectImage.pngData() {
+                processedImage.imageData = subjectData
+            }
+        }
+    }
+
+    private func presentOverlayError(_ message: String) {
+        overlayError = message
+        showOverlayError = true
+    }
+
+    private func loadOverlay(from item: PhotosPickerItem) async {
+        await MainActor.run {
+            isUpdatingOverlay = true
+        }
+
+        defer {
+            Task { @MainActor in
+                isUpdatingOverlay = false
+            }
+        }
+
+        do {
+            if let data = try await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data) {
+                await MainActor.run {
+                    overlayPickerItem = nil
+                    applyOverlay(image)
+                }
+            } else {
+                await MainActor.run {
+                    overlayPickerItem = nil
+                    presentOverlayError("Unable to load the selected overlay image.")
+                }
+            }
+        } catch {
+            await MainActor.run {
+                overlayPickerItem = nil
+                presentOverlayError(error.localizedDescription)
             }
         }
     }

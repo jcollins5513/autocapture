@@ -15,6 +15,8 @@ final class ProcessedImage {
     var captureDate: Date
     @Attribute(.externalStorage)
     var imageData: Data
+    @Attribute(.externalStorage)
+    var liftedImageData: Data?
     var subjectDescription: String
     var backgroundCategoryRawValue: String?
     var isSubjectLifted: Bool
@@ -35,11 +37,13 @@ final class ProcessedImage {
         isSubjectLifted: Bool = true,
         captureMode: CaptureSubjectMode = .singleSubject,
         originalImage: UIImage? = nil,
-        maskImage: UIImage? = nil
+        maskImage: UIImage? = nil,
+        liftedImage: UIImage? = nil
     ) {
         self.id = UUID()
         self.captureDate = captureDate
         self.imageData = image.pngData() ?? Data()
+        self.liftedImageData = liftedImage?.pngData()
         self.subjectDescription = subjectDescription
         self.backgroundCategoryRawValue = backgroundCategory?.rawValue
         self.session = session
@@ -80,5 +84,10 @@ final class ProcessedImage {
     var maskImage: UIImage? {
         guard let maskImageData else { return nil }
         return UIImage(data: maskImageData)
+    }
+
+    var liftedImage: UIImage? {
+        guard let liftedImageData else { return nil }
+        return UIImage(data: liftedImageData)
     }
 }

@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftData
+import UIKit
 
 @Model
 final class CaptureSession {
@@ -47,6 +48,8 @@ final class CaptureSession {
     var compositions: [CompositionProject]
     @Relationship(deleteRule: .cascade)
     var generatedBackgrounds: [GeneratedBackground]
+    @Attribute(.externalStorage)
+    var overlayImageData: Data?
 
     init(stockNumber: String, title: String? = nil, notes: String = "", categories: [BackgroundCategory] = []) {
         self.id = UUID()
@@ -85,5 +88,15 @@ final class CaptureSession {
 
     func touch() {
         updatedAt = Date()
+    }
+
+    var overlayImage: UIImage? {
+        get {
+            guard let overlayImageData else { return nil }
+            return UIImage(data: overlayImageData)
+        }
+        set {
+            overlayImageData = newValue?.pngData()
+        }
     }
 }

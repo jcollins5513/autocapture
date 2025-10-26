@@ -14,6 +14,7 @@ import SwiftUI
 class CameraViewModel: ObservableObject {
     let cameraService = CameraService()
     private let backgroundRemovalService = BackgroundRemovalService()
+    private let overlayCompositor = OverlayCompositor()
 
     @Published var isProcessing = false
     @Published var errorMessage: String?
@@ -207,15 +208,28 @@ class CameraViewModel: ObservableObject {
     ) {
         guard let context = modelContext else { return }
 
+        let liftedImage: UIImage? = isSubjectLifted ? image : nil
+        let finalImage: UIImage
+
+        if isSubjectLifted,
+           let session = activeSession,
+           let overlay = session.overlayImage,
+           let composited = overlayCompositor.composite(subject: image, onto: overlay) {
+            finalImage = composited
+        } else {
+            finalImage = image
+        }
+
         let processedImage = ProcessedImage(
-            image: image,
+            image: finalImage,
             subjectDescription: subjectDescription,
             backgroundCategory: activeSession?.primaryCategory,
             session: activeSession,
             isSubjectLifted: isSubjectLifted,
             captureMode: captureMode,
             originalImage: originalImage,
-            maskImage: maskImage
+            maskImage: maskImage,
+            liftedImage: liftedImage
         )
 
         if let session = activeSession {

@@ -40,10 +40,12 @@ final class EdgeCleanupViewModel: ObservableObject {
     @Published var maskImage: UIImage
     let originalImage: UIImage
     private let backgroundRemovalService = BackgroundRemovalService()
+    private let overlayCompositor = OverlayCompositor()
     private let processedImage: ProcessedImage
 
     init?(image: ProcessedImage) {
-        guard let original = image.originalImage, let mask = image.maskImage, let foreground = image.image else {
+        let lifted = image.liftedImage ?? image.image
+        guard let original = image.originalImage, let mask = image.maskImage, let foreground = lifted else {
             return nil
         }
         self.originalImage = original
@@ -87,7 +89,15 @@ final class EdgeCleanupViewModel: ObservableObject {
     }
 
     func commitChanges(context: ModelContext) throws {
-        processedImage.imageData = previewImage.pngData() ?? processedImage.imageData
+        let liftedData = previewImage.pngData()
+        processedImage.liftedImageData = liftedData
+        if processedImage.isSubjectLifted,
+           let overlay = processedImage.session?.overlayImage,
+           let composited = overlayCompositor.composite(subject: previewImage, onto: overlay) {
+            processedImage.imageData = composited.pngData() ?? processedImage.imageData
+        } else {
+            processedImage.imageData = liftedData ?? processedImage.imageData
+        }
         processedImage.maskImageData = maskImage.pngData()
         processedImage.originalImageData = originalImage.pngData()
         try context.save()
