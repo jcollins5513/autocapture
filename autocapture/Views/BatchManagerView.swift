@@ -17,6 +17,7 @@ struct BatchManagerView: View {
 
     @State private var navigationPath = NavigationPath()
     @State private var presentCreationForm = false
+    @State private var showGallery = false
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -28,7 +29,18 @@ struct BatchManagerView: View {
                 SessionDetailView(session: session)
             }
             .navigationTitle("Capture Sessions")
-            .toolbar { EditButton() }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showGallery = true
+                    } label: {
+                        Label("Gallery", systemImage: "photo.on.rectangle.angled")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    EditButton()
+                }
+            }
             .sheet(isPresented: $presentCreationForm) {
                 NavigationStack {
                     SessionCreationForm(
@@ -44,6 +56,9 @@ struct BatchManagerView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(viewModel.errorMessage ?? "")
+            }
+            .sheet(isPresented: $showGallery) {
+                GalleryView()
             }
         }
     }

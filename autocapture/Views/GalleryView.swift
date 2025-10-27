@@ -74,7 +74,7 @@ struct GalleryView: View {
                         Image(uiImage: uiImage)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                            .frame(width: size, height: size)
+                            .frame(width: max(size, 1), height: max(size, 1))
                             .clipped()
                     }
                     .buttonStyle(.plain)

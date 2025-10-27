@@ -9,6 +9,7 @@ import SwiftUI
 
 struct CapturedImageCard: View {
     let processedImage: ProcessedImage
+    @State private var showImageDetail = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -27,5 +28,11 @@ struct CapturedImageCard: View {
         .frame(maxWidth: .infinity)
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+        .onTapGesture {
+            showImageDetail = true
+        }
+        .sheet(isPresented: $showImageDetail) {
+            ImageDetailView(image: processedImage)
+        }
     }
 }
