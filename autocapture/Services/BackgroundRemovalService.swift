@@ -7,6 +7,7 @@
 
 import Accelerate
 import CoreImage
+import OSLog
 import UIKit
 import Vision
 
@@ -17,6 +18,7 @@ struct ForegroundExtractionResult {
 }
 
 class BackgroundRemovalService {
+    private let logger = Logger(subsystem: "com.autocapture", category: "BackgroundRemovalService")
     private let context = CIContext(options: [
         .useSoftwareRenderer: false,
         .priorityRequestLow: false
@@ -91,16 +93,13 @@ class BackgroundRemovalService {
     }
 
     func apply(mask: UIImage, to image: UIImage) throws -> UIImage {
-        guard let maskCGImage = mask.cgImage else {
+        guard let maskCIImage = CIImage(image: mask) else {
             throw CameraError.backgroundRemovalFailed
         }
-
-        let maskCIImage = CIImage(cgImage: maskCGImage).clampedToExtent()
-        guard let originalCGImage = image.cgImage else {
+        guard let originalCIImage = CIImage(image: image) else {
             throw CameraError.backgroundRemovalFailed
         }
-
-        let originalCIImage = CIImage(cgImage: originalCGImage)
+        logger.debug("apply(mask:to:) started. mask=\(BackgroundRemovalService.describe(image: mask), privacy: .public) original=\(BackgroundRemovalService.describe(image: image), privacy: .public) maskExtent=\(maskCIImage.extent.debugDescription, privacy: .public) imageExtent=\(originalCIImage.extent.debugDescription, privacy: .public)")
 
         let compositedImage = try applyMaskWithFeathering(mask: maskCIImage, to: originalCIImage)
 
@@ -108,7 +107,9 @@ class BackgroundRemovalService {
             throw CameraError.backgroundRemovalFailed
         }
 
-        return UIImage(cgImage: outputCGImage, scale: image.scale, orientation: image.imageOrientation)
+        let result = UIImage(cgImage: outputCGImage, scale: image.scale, orientation: image.imageOrientation)
+        logger.debug("apply(mask:to:) completed. output=\(BackgroundRemovalService.describe(image: result), privacy: .public)")
+        return result
     }
 
     /// Refines the mask using morphological operations and smoothing
@@ -168,9 +169,11 @@ class BackgroundRemovalService {
         // Scale mask to match image size using bicubic interpolation (highest quality)
         let scaleX = image.extent.width / mask.extent.width
         let scaleY = image.extent.height / mask.extent.height
+        logger.debug("applyMaskWithFeathering initial. maskExtent=\(mask.extent.debugDescription, privacy: .public) imageExtent=\(image.extent.debugDescription, privacy: .public) scaleX=\(scaleX, privacy: .public) scaleY=\(scaleY, privacy: .public)")
 
         // Use bicubic scaling for smoother results
         var scaledMask = mask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+        logger.debug("Mask transformed via affine. extent=\(scaledMask.extent.debugDescription, privacy: .public)")
 
         // Apply lanczos scale filter for even better quality
         if let scaleFilter = CIFilter(name: "CILanczosScaleTransform") {
@@ -179,11 +182,13 @@ class BackgroundRemovalService {
             scaleFilter.setValue(1.0, forKey: kCIInputAspectRatioKey)
             if let scaled = scaleFilter.outputImage {
                 scaledMask = scaled
+                logger.debug("Mask transformed via lanczos. extent=\(scaledMask.extent.debugDescription, privacy: .public)")
             }
         }
 
         // Create a transparent background
         let transparent = CIImage(color: .clear).cropped(to: image.extent)
+        logger.debug("Transparent background extent=\(transparent.extent.debugDescription, privacy: .public)")
 
         // Use the mask to blend the original image with transparency
         // This creates smooth alpha transitions at edges
@@ -209,5 +214,20 @@ class BackgroundRemovalService {
         sharpenFilter.setValue(0.4, forKey: kCIInputIntensityKey) // More sharpening
 
         return sharpenFilter.outputImage ?? outputImage
+    }
+}
+
+private extension BackgroundRemovalService {
+    static func describe(image: UIImage) -> String {
+        let orientation = image.imageOrientation.rawValue
+        let scale = image.scale
+        let sizeString = image.size.debugDescription
+        let cgInfo: String
+        if let cgImage = image.cgImage {
+            cgInfo = "\(cgImage.width)x\(cgImage.height)"
+        } else {
+            cgInfo = "nil"
+        }
+        return "size=\(sizeString) orientation=\(orientation) scale=\(scale) cg=\(cgInfo)"
     }
 }

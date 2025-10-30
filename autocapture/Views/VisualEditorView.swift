@@ -11,8 +11,10 @@ import PhotosUI
 import SwiftData
 import SwiftUI
 import UIKit
+import OSLog
 
 struct VisualEditorView: View {
+    private static let logger = Logger(subsystem: "com.autocapture", category: "VisualEditorView")
     @Environment(\.modelContext)
     private var modelContext
     @Environment(\.dismiss)
@@ -101,6 +103,7 @@ struct VisualEditorView: View {
             }
         }
         .onAppear {
+            VisualEditorView.logger.debug("VisualEditorView appeared. projectID=\(project.id.uuidString, privacy: .public) sessionID=\(session.id.uuidString, privacy: .public)")
             viewModel.configure(
                 context: modelContext,
                 project: project,
@@ -110,6 +113,7 @@ struct VisualEditorView: View {
         }
         .onChange(of: selectedPhoto) { _, newValue in
             guard let newValue else { return }
+            VisualEditorView.logger.debug("PhotosPicker selection changed.")
             Task { await importPhoto(item: newValue) }
         }
         .confirmationDialog(
@@ -296,7 +300,10 @@ struct VisualEditorView: View {
                 }
             }
         }
-        .onAppear { canvasSize = geometry.size }
+        .onAppear {
+            canvasSize = geometry.size
+            VisualEditorView.logger.debug("Canvas geometry onAppear. size=\(String(describing: geometry.size), privacy: .public)")
+        }
     }
 
     private var layerControlsSection: some View {
@@ -373,6 +380,7 @@ struct VisualEditorView: View {
 
     private func importPhoto(item: PhotosPickerItem) async {
         guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else { return }
+        VisualEditorView.logger.debug("PhotosPicker item loaded. imageSize=\(image.size.debugDescription, privacy: .public)")
         await MainActor.run {
             handleImportedImage(image, source: .photos)
             selectedPhoto = nil
@@ -381,12 +389,14 @@ struct VisualEditorView: View {
 
     private func exportComposition() {
         guard canvasSize != .zero else { return }
+        VisualEditorView.logger.debug("Export started. canvasSize=\(String(describing: canvasSize), privacy: .public)")
         guard let image = viewModel.renderCompositeImage(size: canvasSize) else {
             viewModel.errorMessage = "Unable to export the current composition."
             viewModel.showError = true
             return
         }
         shareItem = ExportShareItem(image: image)
+        VisualEditorView.logger.debug("Export finished. renderedSize=\(image.size.debugDescription, privacy: .public)")
     }
 
     @MainActor
@@ -394,6 +404,7 @@ struct VisualEditorView: View {
         pendingImportImage = image
         pendingImportSource = source
         showImportOptions = true
+        VisualEditorView.logger.debug("Prepared imported image. source=\(String(describing: source), privacy: .public) size=\(image.size.debugDescription, privacy: .public)")
     }
 
     @MainActor

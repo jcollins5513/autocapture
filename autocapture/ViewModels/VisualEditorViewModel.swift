@@ -11,6 +11,7 @@ import Foundation
 import SwiftData
 import SwiftUI
 import UIKit
+import OSLog
 
 @MainActor
 final class VisualEditorViewModel: ObservableObject {
@@ -31,6 +32,7 @@ final class VisualEditorViewModel: ObservableObject {
     private let backgroundGenerationService: BackgroundGenerationService
     private let backgroundRemovalService: BackgroundRemovalService
     private var modelContext: ModelContext?
+    private let logger = Logger(subsystem: "com.autocapture", category: "VisualEditorViewModel")
 
     init(
         backgroundGenerationService: BackgroundGenerationService? = nil,
@@ -46,6 +48,7 @@ final class VisualEditorViewModel: ObservableObject {
         session: CaptureSession?,
         selectedImageIDs: Set<UUID>
     ) {
+        logger.debug("configure invoked. projectID=\(project.id.uuidString, privacy: .public) sessionID=\(session?.id.uuidString ?? "nil", privacy: .public) selectedIDs=\(selectedImageIDs.debugDescription, privacy: .public)")
         self.modelContext = context
         self.activeProject = project
 
@@ -70,6 +73,7 @@ final class VisualEditorViewModel: ObservableObject {
            generatedBackgrounds.contains(where: { $0.id == projectBackground.id }) == false {
             generatedBackgrounds.insert(projectBackground, at: 0)
         }
+        logger.debug("Configuration complete. layers=\(project.layers.count, privacy: .public) backgrounds=\(self.generatedBackgrounds.count, privacy: .public)")
     }
 
     private func synchronizeSubjectLayers(
@@ -495,7 +499,14 @@ final class VisualEditorViewModel: ObservableObject {
 
     func renderCompositeImage(size: CGSize) -> UIImage? {
         guard let project = activeProject else { return nil }
-        return CompositionRenderer.render(project: project, canvasSize: size)
+        logger.debug("renderCompositeImage requested. canvasSize=\(String(describing: size), privacy: .public) layerCount=\(project.layers.count, privacy: .public)")
+        let image = CompositionRenderer.render(project: project, canvasSize: size)
+        if let image {
+            logger.debug("renderCompositeImage success. renderedSize=\(image.size.debugDescription, privacy: .public)")
+        } else {
+            logger.error("renderCompositeImage failed to produce output.")
+        }
+        return image
     }
 
     var hasBackgroundLibrary: Bool {

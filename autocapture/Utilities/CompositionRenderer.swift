@@ -6,10 +6,13 @@
 //
 
 import CoreGraphics
+import OSLog
 import SwiftUI
 import UIKit
 
 enum CompositionRenderer {
+    private static let logger = Logger(subsystem: "com.autocapture", category: "CompositionRenderer")
+
     static func render(project: CompositionProject, canvasSize: CGSize) -> UIImage? {
         guard canvasSize.width > 0, canvasSize.height > 0 else { return nil }
 
@@ -17,6 +20,7 @@ enum CompositionRenderer {
         let layers = project.layers
             .filter { $0.isVisible }
             .sorted { $0.order < $1.order }
+        logger.debug("Rendering composition. canvasSize=\(String(describing: canvasSize), privacy: .public) visibleLayerCount=\(layers.count, privacy: .public) hasBackground=\(project.background != nil, privacy: .public)")
 
         let image = renderer.image { context in
             let rect = CGRect(origin: .zero, size: canvasSize)
@@ -54,6 +58,7 @@ enum CompositionRenderer {
             y: (canvasSize.height - scaledSize.height) / 2
         )
         let drawRect = CGRect(origin: origin, size: scaledSize)
+        logger.debug("Drawing background. imageSize=\(imageSize.debugDescription, privacy: .public) scale=\(scale, privacy: .public) drawRect=\(drawRect.debugDescription, privacy: .public)")
 
         context.saveGState()
         context.addRect(CGRect(origin: .zero, size: canvasSize))
@@ -86,6 +91,7 @@ enum CompositionRenderer {
             width: imageSize.width,
             height: imageSize.height
         )
+        logger.debug("Drawing layer. name=\(layer.name, privacy: .public) order=\(layer.order, privacy: .public) imageSize=\(imageSize.debugDescription, privacy: .public) offset=(\(offset.x, privacy: .public), \(offset.y, privacy: .public)) rotationDegrees=\(layer.rotation, privacy: .public) scale=\(layer.scale, privacy: .public) opacity=\(layer.opacity, privacy: .public)")
 
         image.draw(in: drawRect)
         context.restoreGState()
