@@ -13,6 +13,7 @@ struct SessionDetailView: View {
     @Environment(\.modelContext)
     private var modelContext
     @Bindable var session: CaptureSession
+    @StateObject private var viewModel: SessionDetailViewModel
 
     @State private var showCamera = false
     @State private var showCaptureSelection = false
@@ -20,6 +21,7 @@ struct SessionDetailView: View {
     @State private var editorPresentation: EditorPresentation?
     @State private var captureSelection: Set<UUID> = []
     @State private var selectedStatus: CaptureSession.Status
+    @State private var showPostGeneration = false
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 12),
@@ -35,14 +37,17 @@ struct SessionDetailView: View {
     init(session: CaptureSession) {
         self._session = Bindable(session)
         self._selectedStatus = State(initialValue: session.status)
+        self._viewModel = StateObject(wrappedValue: SessionDetailViewModel(session: session))
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 headerSection
+                batchOperationsSection
                 capturedImagesSection
                 generatedBackgroundSection
+                compositionsSection
             }
             .padding(.horizontal)
             .padding(.bottom, 32)
@@ -62,6 +67,25 @@ struct SessionDetailView: View {
                     Label("Edit", systemImage: "paintbrush.pointed")
                 }
                 .disabled(session.images.isEmpty)
+
+                Menu {
+                    Button {
+                        viewModel.exportAllCompositions(session: session)
+                    } label: {
+                        Label("Export All", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(session.compositions.isEmpty)
+                    
+                    Divider()
+                    
+                    Button {
+                        showPostGeneration = true
+                    } label: {
+                        Label("Generate Social Media Post", systemImage: "square.and.pencil")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
             }
         }
         .sheet(isPresented: $showCamera) {
@@ -114,6 +138,19 @@ struct SessionDetailView: View {
             if isPresented == false {
                 pendingProject = nil
             }
+        }
+        .alert("Error", isPresented: $viewModel.showError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.errorMessage ?? "An unknown error occurred")
+        }
+        .sheet(isPresented: $viewModel.showExportSheet) {
+            if viewModel.exportImages.isEmpty == false {
+                ActivityView(activityItems: viewModel.exportImages)
+            }
+        }
+        .sheet(isPresented: $showPostGeneration) {
+            PostGenerationView(session: session)
         }
     }
 
@@ -197,6 +234,114 @@ struct SessionDetailView: View {
         }
     }
 
+    private var batchOperationsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Batch Operations")
+                .font(.title3)
+                .fontWeight(.semibold)
+
+            VStack(spacing: 12) {
+                // Background generation form
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Category", selection: $viewModel.selectedCategory) {
+                        ForEach(BackgroundCategory.allCases) { category in
+                            Text(category.displayName).tag(category)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    TextField("Describe the environment (optional)", text: $viewModel.subjectDescription)
+                        .textFieldStyle(.roundedBorder)
+
+                    Picker("Aspect Ratio", selection: $viewModel.aspectRatio) {
+                        Text("16:9").tag("16:9")
+                        Text("3:2").tag("3:2")
+                        Text("4:5").tag("4:5")
+                        Text("9:16").tag("9:16")
+                        Text("1:1").tag("1:1")
+                    }
+                    .pickerStyle(.menu)
+                }
+
+                // Generate and Apply button
+                Button {
+                    Task {
+                        await viewModel.generateBackgroundAndApplyToAllVehicles(
+                            session: session,
+                            context: modelContext
+                        )
+                    }
+                } label: {
+                    HStack {
+                        if viewModel.isGeneratingBackground || viewModel.isCreatingCompositions {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        }
+                        Text(
+                            viewModel.isGeneratingBackground
+                                ? "Generating Background..."
+                                : viewModel.isCreatingCompositions
+                                    ? "Applying to Vehicles..."
+                                    : "Generate Background & Apply to All Vehicles"
+                        )
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    session.images.isEmpty
+                        || viewModel.isGeneratingBackground
+                        || viewModel.isCreatingCompositions
+                )
+
+                // Apply existing background to all vehicles
+                if session.generatedBackgrounds.isEmpty == false {
+                    Menu {
+                        ForEach(
+                            session.generatedBackgrounds.sorted(by: { $0.createdAt > $1.createdAt })
+                        ) { background in
+                            Button {
+                                Task {
+                                    await viewModel.applyBackgroundToAllVehicles(
+                                        session: session,
+                                        background: background,
+                                        context: modelContext
+                                    )
+                                }
+                            } label: {
+                                Label(
+                                    "Apply \(background.category.displayName)",
+                                    systemImage: "rectangle.3.group"
+                                )
+                            }
+                            .disabled(viewModel.isCreatingCompositions)
+                        }
+                    } label: {
+                        HStack {
+                            if viewModel.isCreatingCompositions {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                            Text(
+                                viewModel.isCreatingCompositions
+                                    ? "Applying..."
+                                    : "Apply Existing Background to All Vehicles"
+                            )
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(
+                        session.images.isEmpty || viewModel.isGeneratingBackground
+                            || viewModel.isCreatingCompositions
+                    )
+                }
+            }
+            .padding()
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color(.systemGray6)))
+        }
+    }
+
     private var generatedBackgroundSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -229,6 +374,80 @@ struct SessionDetailView: View {
                     .padding(.vertical, 4)
                 }
             }
+        }
+    }
+
+    private var compositionsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Compositions")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                Spacer()
+                HStack {
+                    if session.compositions.isEmpty == false {
+                        Button {
+                            viewModel.exportAllCompositions(session: session)
+                        } label: {
+                            Label("Export All", systemImage: "square.and.arrow.up")
+                        }
+                        .disabled(viewModel.isExporting)
+                        
+                        Button {
+                            Task {
+                                await viewModel.updateCompositionScales(session: session, context: modelContext)
+                            }
+                        } label: {
+                            Label("Fix Scaling", systemImage: "arrow.down.right.and.arrow.up.left")
+                        }
+                        .disabled(viewModel.isCreatingCompositions || session.compositions.isEmpty)
+                        
+                        Button {
+                            showPostGeneration = true
+                        } label: {
+                            Label("Generate Post", systemImage: "square.and.pencil")
+                        }
+                    }
+                }
+            }
+
+            if session.compositions.isEmpty {
+                Text("Compositions will appear here after applying backgrounds to vehicles.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVGrid(columns: gridColumns, spacing: 12) {
+                    ForEach(
+                        session.compositions.sorted(by: { $0.createdAt > $1.createdAt })
+                    ) { composition in
+                        CompositionCard(composition: composition, canvasSize: defaultCanvasSize)
+                    }
+                }
+            }
+        }
+    }
+
+    private var defaultCanvasSize: CGSize {
+        if let firstBackground = session.compositions.first?.background {
+            return canvasSizeForAspectRatio(firstBackground.aspectRatio)
+        }
+        return CGSize(width: 3584, height: 2016) // Default 16:9
+    }
+
+    private func canvasSizeForAspectRatio(_ aspectRatio: String) -> CGSize {
+        switch aspectRatio {
+        case "1:1":
+            return CGSize(width: 2048, height: 2048)
+        case "3:2":
+            return CGSize(width: 2560, height: 1707)
+        case "4:5":
+            return CGSize(width: 2048, height: 2560)
+        case "9:16":
+            return CGSize(width: 2048, height: 3584)
+        case "16:9":
+            return CGSize(width: 3584, height: 2016)
+        default:
+            return CGSize(width: 3584, height: 2016)
         }
     }
 

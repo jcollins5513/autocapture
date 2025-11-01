@@ -453,7 +453,6 @@ struct EdgeCleanupView: View {
     private let magnifierDiameter: CGFloat = 140
     private let magnificationAmount: CGFloat = 2.5
     @State private var lastBrushImagePoint: CGPoint?
-    @State private var magnifierTouchLocation: CGPoint?
     private let lassoPointSpacing: CGFloat = 18
     private let lassoSnapRatio: CGFloat = 1.8
 
@@ -501,7 +500,6 @@ struct EdgeCleanupView: View {
             }
             .onChange(of: editingMode) { _, newMode in
                 lastBrushImagePoint = nil
-                magnifierTouchLocation = nil
                 if newMode != .lasso {
                     lassoImagePoints = []
                 }
@@ -638,7 +636,9 @@ struct EdgeCleanupView: View {
         return MagnifierState(
             focusLocation: viewLocation,
             imageFrame: mapping.frame,
-            magnifierCenter: center
+            magnifierCenter: center,
+            imagePoint: mapping.point,
+            viewToImageScale: mapping.scale
         )
     }
 
@@ -675,48 +675,65 @@ struct EdgeCleanupView: View {
         let diameter: CGFloat
         let magnification: CGFloat
 
-        private var anchorPoint: UnitPoint {
-            guard state.imageFrame.width > 0, state.imageFrame.height > 0 else {
-                return .center
+        private var croppedImage: UIImage? {
+            guard let cgImage = image.cgImage,
+                  state.viewToImageScale > 0,
+                  magnification > 0,
+                  image.size.width > 0,
+                  image.size.height > 0 else {
+                return nil
             }
 
-            let normalizedX = (state.focusLocation.x - state.imageFrame.minX) / state.imageFrame.width
-            let normalizedY = (state.focusLocation.y - state.imageFrame.minY) / state.imageFrame.height
+            let regionSize = max((diameter / magnification) / state.viewToImageScale, 1)
+            let clampedOriginX = max(0, min(image.size.width - regionSize, state.imagePoint.x - regionSize / 2))
+            let clampedOriginY = max(0, min(image.size.height - regionSize, state.imagePoint.y - regionSize / 2))
+            let croppingRect = CGRect(
+                x: clampedOriginX * image.scale,
+                y: clampedOriginY * image.scale,
+                width: regionSize * image.scale,
+                height: regionSize * image.scale
+            ).integral
 
-            return UnitPoint(x: normalizedX, y: normalizedY)
+            guard croppingRect.width > 0,
+                  croppingRect.height > 0,
+                  let cropped = cgImage.cropping(to: croppingRect) else {
+                return nil
+            }
+
+            return UIImage(cgImage: cropped, scale: image.scale, orientation: image.imageOrientation)
         }
 
         var body: some View {
-            Image(uiImage: image)
-                .resizable()
-                .interpolation(.high)
-                .aspectRatio(contentMode: .fit)
-                .frame(width: state.imageFrame.width, height: state.imageFrame.height)
-                .scaleEffect(magnification, anchor: anchorPoint)
-                .offset(
-                    x: (state.imageFrame.midX - state.focusLocation.x) * (magnification - 1),
-                    y: (state.imageFrame.midY - state.focusLocation.y) * (magnification - 1)
-                )
-                .frame(width: diameter, height: diameter)
-                .clipShape(Circle())
-                .overlay(
-                    Circle()
-                        .stroke(Color.white, lineWidth: 3)
-                )
-                .overlay(
-                    Circle()
-                        .stroke(Color.black.opacity(0.2), lineWidth: 1)
-                )
-                .overlay(
-                    crosshair
-                )
-                .background(
-                    Circle()
-                        .fill(Color.black.opacity(0.25))
-                )
-                .shadow(color: Color.black.opacity(0.25), radius: 8, x: 0, y: 4)
-                .position(state.magnifierCenter)
-                .allowsHitTesting(false)
+            Group {
+                if let croppedImage {
+                    Image(uiImage: croppedImage)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFill()
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: diameter, height: diameter)
+            .clipShape(Circle())
+            .overlay(
+                Circle()
+                    .stroke(Color.white, lineWidth: 3)
+            )
+            .overlay(
+                Circle()
+                    .stroke(Color.black.opacity(0.2), lineWidth: 1)
+            )
+            .overlay(
+                crosshair
+            )
+            .background(
+                Circle()
+                    .fill(Color.black.opacity(0.25))
+            )
+            .shadow(color: Color.black.opacity(0.25), radius: 8, x: 0, y: 4)
+            .position(state.magnifierCenter)
+            .allowsHitTesting(false)
         }
 
         private var crosshair: some View {
@@ -743,6 +760,8 @@ struct EdgeCleanupView: View {
         let focusLocation: CGPoint
         let imageFrame: CGRect
         let magnifierCenter: CGPoint
+        let imagePoint: CGPoint
+        let viewToImageScale: CGFloat
     }
 
     private func drawingGesture(in geometry: GeometryProxy) -> some Gesture {
@@ -821,7 +840,6 @@ struct EdgeCleanupView: View {
                 magnifierState = nil
                 fingerLocation = nil
                 lastBrushImagePoint = nil
-                magnifierTouchLocation = nil
                 Self.logger.debug("Drawing session finished.")
             }
     }

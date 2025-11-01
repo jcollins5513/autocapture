@@ -48,6 +48,7 @@ struct VisualEditorView: View {
     @State private var showAddText = false
     @State private var showAddObject = false
     @State private var selectedCaptureIDs: Set<UUID> = []
+    @State private var showPostGeneration = false
 
     init(project: CompositionProject, session: CaptureSession, selectedImageIDs: Set<UUID>) {
         self._project = Bindable(project)
@@ -126,6 +127,14 @@ struct VisualEditorView: View {
                         showDocumentPicker = true
                     } label: {
                         Label("Import File", systemImage: "tray.and.arrow.down")
+                    }
+                    
+                    Divider()
+                    
+                    Button {
+                        showPostGeneration = true
+                    } label: {
+                        Label("Generate Social Media Post", systemImage: "square.and.pencil")
                     }
                 } label: {
                     Image(systemName: "plus.circle")
@@ -239,6 +248,9 @@ struct VisualEditorView: View {
                     }
                 )
             }
+        }
+        .sheet(isPresented: $showPostGeneration) {
+            PostGenerationView(composition: project, session: session)
         }
     }
 

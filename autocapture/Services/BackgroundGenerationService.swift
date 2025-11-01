@@ -15,27 +15,53 @@ private struct BackgroundGenerationAPIResponse: Decodable {
             let base64JSON: String?
             let url: String?
             let imageBase64: String?
+            let revisedPrompt: String?
 
             enum CodingKeys: String, CodingKey {
                 case type
                 case base64JSON = "b64_json"
                 case url
                 case imageBase64 = "image_base64"
+                case revisedPrompt = "revised_prompt"
             }
         }
 
         let base64JSON: String?
         let url: String?
         let content: [Content]?
+        let revisedPrompt: String?
 
         enum CodingKeys: String, CodingKey {
             case base64JSON = "b64_json"
             case url
             case content
+            case revisedPrompt = "revised_prompt"
         }
     }
 
     let data: [Item]
+    
+    // Allow additional fields that might be present but not used
+    let outputFormat: String?
+    let quality: String?
+    let size: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case data
+        case outputFormat = "output_format"
+        case quality
+        case size
+        // Note: usage field is intentionally omitted as it's not needed
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        data = try container.decode([Item].self, forKey: .data)
+        outputFormat = try? container.decode(String.self, forKey: .outputFormat)
+        quality = try? container.decode(String.self, forKey: .quality)
+        size = try? container.decode(String.self, forKey: .size)
+        // usage field is ignored - decoder will skip unknown keys when using custom init
+    }
 }
 
 @MainActor
@@ -124,18 +150,87 @@ final class BackgroundGenerationService {
             }
         }
 
+        // Log raw JSON structure for debugging
+        if let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            print("[BackgroundGeneration] Response keys:", jsonObject.keys.joined(separator: ", "))
+            if let dataArray = jsonObject["data"] as? [[String: Any]], let firstItem = dataArray.first {
+                print("[BackgroundGeneration] First data item keys:", firstItem.keys.joined(separator: ", "))
+            }
+        }
+
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let apiResponse = try decoder.decode(BackgroundGenerationAPIResponse.self, from: data)
+        // Don't use convertFromSnakeCase as we have explicit CodingKeys mappings
+        // decoder.keyDecodingStrategy = .convertFromSnakeCase
+        
+        // Try to decode with flexible parsing
+        let apiResponse: BackgroundGenerationAPIResponse
+        do {
+            apiResponse = try decoder.decode(BackgroundGenerationAPIResponse.self, from: data)
+        } catch {
+            print("[BackgroundGeneration] Decode error: \(error)")
+            print("[BackgroundGeneration] Decode error details: \(error.localizedDescription)")
+            if let decodingError = error as? DecodingError {
+                switch decodingError {
+                case .keyNotFound(let key, let context):
+                    print("[BackgroundGeneration] Missing key: \(key.stringValue) at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                case .typeMismatch(let type, let context):
+                    print("[BackgroundGeneration] Type mismatch for \(type) at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                case .valueNotFound(let type, let context):
+                    print("[BackgroundGeneration] Value not found for \(type) at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                case .dataCorrupted(let context):
+                    print("[BackgroundGeneration] Data corrupted at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                @unknown default:
+                    print("[BackgroundGeneration] Unknown decoding error")
+                }
+            }
+            print("[BackgroundGeneration] Raw response (first 500 chars): \(String(data: data.prefix(500), encoding: .utf8) ?? "invalid")")
+            throw GenerationError.invalidResponse
+        }
 
         guard let item = apiResponse.data.first else {
             print("[BackgroundGeneration] Invalid response: data array empty")
+            if let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                print("[BackgroundGeneration] Full response structure: \(jsonObject)")
+            }
             throw GenerationError.invalidResponse
         }
 
         print(
-            "[BackgroundGeneration] Parsed item: hasBase64=\(item.base64JSON != nil), hasURL=\(item.url != nil)"
+            "[BackgroundGeneration] Parsed item: hasBase64=\(item.base64JSON != nil), hasURL=\(item.url != nil), hasContent=\(item.content != nil)"
         )
+        
+        // Debug: Check raw base64 value
+        if let base64 = item.base64JSON {
+            print("[BackgroundGeneration] Found base64 JSON: length=\(base64.count), preview=\(base64.prefix(50))...")
+        } else {
+            print("[BackgroundGeneration] base64JSON is nil")
+        }
+        
+        // Debug: Check if we need to look at raw JSON directly
+        if item.base64JSON == nil, let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let dataArray = jsonObject["data"] as? [[String: Any]], let firstItem = dataArray.first {
+            print("[BackgroundGeneration] Found data array in raw JSON but decoded item missing base64 - trying raw JSON extraction")
+            if let imageDataResult = try? await imageDataFromRawJSON(rawJSON: firstItem, fallbackItem: item) {
+                print("[BackgroundGeneration] Successfully extracted image data from raw JSON")
+                let generatedBackground = GeneratedBackground(
+                    prompt: prompt,
+                    category: request.category,
+                    aspectRatio: aspectRatio,
+                    isCommunityShared: request.shareWithCommunity,
+                    session: request.session,
+                    imageData: imageDataResult
+                )
+                let image = UIImage(data: imageDataResult)
+                return BackgroundGenerationResult(background: generatedBackground, image: image)
+            }
+        }
+        
+        if let content = item.content {
+            print("[BackgroundGeneration] Content array count: \(content.count)")
+            for (index, contentItem) in content.enumerated() {
+                print("[BackgroundGeneration] Content[\(index)]: type=\(contentItem.type ?? "nil"), hasBase64=\(contentItem.base64JSON != nil), hasURL=\(contentItem.url != nil)")
+            }
+        }
 
         let imageData = try await imageData(from: item)
         print("[BackgroundGeneration] Decoded image bytes:", imageData.count)
@@ -172,6 +267,38 @@ final class BackgroundGenerationService {
         }
     }
 
+    private func imageDataFromRawJSON(rawJSON: [String: Any], fallbackItem: BackgroundGenerationAPIResponse.Item) async throws -> Data? {
+        // Try to extract base64 from raw JSON first
+        if let b64Value = rawJSON["b64_json"] as? String, !b64Value.isEmpty {
+            print("[BackgroundGeneration] Extracting from raw JSON b64_json field, length=\(b64Value.count)")
+            if let data = decodeBase64Image(from: b64Value) {
+                print("[BackgroundGeneration] Successfully decoded base64 from raw JSON, data size=\(data.count)")
+                return data
+            } else {
+                print("[BackgroundGeneration] Failed to decode base64 from raw JSON")
+            }
+        } else {
+            print("[BackgroundGeneration] No b64_json found in raw JSON")
+        }
+        
+        if let urlString = rawJSON["url"] as? String, !urlString.isEmpty, let url = URL(string: urlString) {
+            print("[BackgroundGeneration] Extracting from raw JSON url field: \(urlString)")
+            let (data, response) = try await urlSession.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                print("[BackgroundGeneration] URL fetch failed with status: \((response as? HTTPURLResponse)?.statusCode ?? 0)")
+                throw GenerationError.invalidResponse
+            }
+            print("[BackgroundGeneration] Successfully fetched image from URL, size=\(data.count)")
+            return data
+        } else {
+            print("[BackgroundGeneration] No valid url found in raw JSON")
+        }
+        
+        // Fallback to standard parsing
+        print("[BackgroundGeneration] Falling back to standard item parsing")
+        return try await imageData(from: fallbackItem)
+    }
+    
     private func imageData(from item: BackgroundGenerationAPIResponse.Item) async throws -> Data {
         let inlineBase64 = item.base64JSON
             ?? item.content?.first(where: { content in
