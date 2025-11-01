@@ -7,11 +7,11 @@
 
 // swiftlint:disable file_length type_body_length
 
+import OSLog
 import PhotosUI
 import SwiftData
 import SwiftUI
 import UIKit
-import OSLog
 
 struct VisualEditorView: View {
     private static let logger = Logger(subsystem: "com.autocapture", category: "VisualEditorView")
@@ -44,6 +44,10 @@ struct VisualEditorView: View {
     @State private var pendingImportImage: UIImage?
     @State private var pendingImportSource: ImportSource?
     @State private var showImportOptions = false
+    @State private var showCaptureSelection = false
+    @State private var showAddText = false
+    @State private var showAddObject = false
+    @State private var selectedCaptureIDs: Set<UUID> = []
 
     init(project: CompositionProject, session: CaptureSession, selectedImageIDs: Set<UUID>) {
         self._project = Bindable(project)
@@ -92,13 +96,39 @@ struct VisualEditorView: View {
                 }
                 .disabled(canvasSize == .zero)
 
-                PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                    Image(systemName: "photo.badge.plus")
-                }
-                Button {
-                    showDocumentPicker = true
+                Menu {
+                    Button {
+                        showCaptureSelection = true
+                    } label: {
+                        Label("Add Captured Images", systemImage: "photo.on.rectangle")
+                    }
+                    .disabled(session.images.isEmpty)
+
+                    Button {
+                        showAddText = true
+                    } label: {
+                        Label("Add Text", systemImage: "textformat")
+                    }
+
+                    Button {
+                        showAddObject = true
+                    } label: {
+                        Label("Add Object (Nano Bannanna)", systemImage: "sparkles.rectangle.stack")
+                    }
+
+                    Divider()
+
+                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                        Label("Import Photo", systemImage: "photo.badge.plus")
+                    }
+
+                    Button {
+                        showDocumentPicker = true
+                    } label: {
+                        Label("Import File", systemImage: "tray.and.arrow.down")
+                    }
                 } label: {
-                    Image(systemName: "tray.and.arrow.down")
+                    Image(systemName: "plus.circle")
                 }
             }
         }
@@ -176,13 +206,67 @@ struct VisualEditorView: View {
         .sheet(item: $shareItem, onDismiss: { shareItem = nil }, content: { item in
             ActivityView(activityItems: [item.image])
         })
+        .sheet(isPresented: $showCaptureSelection) {
+            NavigationStack {
+                CaptureSelectionView(
+                    images: session.images.sorted(by: { $0.captureDate > $1.captureDate }),
+                    selectedIDs: $selectedCaptureIDs
+                ) {
+                    viewModel.addCapturedImages(from: session, selectedIDs: selectedCaptureIDs)
+                    selectedCaptureIDs = []
+                    showCaptureSelection = false
+                }
+            }
+        }
+        .sheet(isPresented: $showAddText) {
+            NavigationStack {
+                AddTextView(
+                    onAdd: { text, fontSize, color in
+                        viewModel.addTextLayer(text: text, fontSize: fontSize, color: color)
+                        showAddText = false
+                    }
+                )
+            }
+        }
+        .sheet(isPresented: $showAddObject) {
+            NavigationStack {
+                AddObjectView(
+                    onGenerate: { prompt in
+                        Task {
+                            await viewModel.generateObjectLayer(prompt: prompt, service: "nano_bannanna")
+                            showAddObject = false
+                        }
+                    }
+                )
+            }
+        }
     }
 
     private var backgroundGeneratorSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Generate Background")
-                .font(.title3)
-                .fontWeight(.semibold)
+            HStack {
+                Text("Step 1: Setup Background")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                Spacer()
+                if project.background == nil {
+                    Label("Required", systemImage: "exclamationmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else {
+                    Label("Complete", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
+            }
+
+            if project.background == nil {
+                Text("Start by generating or selecting a background for your composition.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 8)
+            }
+
             backgroundGenerationForm
             if viewModel.hasBackgroundLibrary {
                 Button {
@@ -309,20 +393,59 @@ struct VisualEditorView: View {
     private var layerControlsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Layers")
+                Text("Step 2: Add Elements")
                     .font(.title3)
                     .fontWeight(.semibold)
                 Spacer()
             }
-            layerList
+
+            if project.background == nil {
+                Text("⚠️ Setup a background first (Step 1) before adding elements.")
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+            }
+
+            if project.layers.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Add elements to your composition:")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "photo.on.rectangle")
+                            Text("Add captured images from this session")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        HStack {
+                            Image(systemName: "textformat")
+                            Text("Add text layers with custom styling")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        HStack {
+                            Image(systemName: "sparkles.rectangle.stack")
+                            Text("Generate objects using Nano Bannanna")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.leading, 8)
+                }
+                .padding(.vertical, 8)
+            } else {
+                layerRows
+            }
         }
     }
 
     @ViewBuilder private var layerList: some View {
         if project.layers.isEmpty {
-            Text("Add subject or uploaded layers to begin composing.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            EmptyView()
         } else {
             layerRows
         }

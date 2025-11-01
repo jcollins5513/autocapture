@@ -8,10 +8,10 @@
 // swiftlint:disable type_body_length function_body_length file_length
 import Combine
 import Foundation
+import OSLog
 import SwiftData
 import SwiftUI
 import UIKit
-import OSLog
 
 @MainActor
 final class VisualEditorViewModel: ObservableObject {
@@ -57,12 +57,7 @@ final class VisualEditorViewModel: ObservableObject {
             if let primary = session.primaryCategory {
                 selectedCategory = primary
             }
-            synchronizeSubjectLayers(
-                for: project,
-                from: session,
-                selectedIDs: selectedImageIDs,
-                context: context
-            )
+            // Removed automatic synchronization - users will manually add captures
             loadBackgroundLibrary(excluding: session)
         } else {
             generatedBackgrounds = []
@@ -276,7 +271,200 @@ final class VisualEditorViewModel: ObservableObject {
             return "Background \(count)"
         case .adjustment:
             return "Adjustment \(count)"
+        case .text:
+            return "Text \(count)"
+        case .object:
+            return "Object \(count)"
         }
+    }
+
+    func addCapturedImages(from session: CaptureSession, selectedIDs: Set<UUID>) {
+        guard let context = modelContext, let project = activeProject else { return }
+
+        let imagesToAdd = session.images.filter { selectedIDs.contains($0.id) }
+
+        for image in imagesToAdd {
+            // Check if layer already exists for this image
+            if project.layers.contains(where: { $0.processedImageID == image.id }) {
+                continue
+            }
+
+            guard let uiImage = image.image,
+                  let data = uiImage.pngData(),
+                  data.isEmpty == false else {
+                continue
+            }
+
+            let layerName: String
+            if image.subjectDescription.isEmpty {
+                layerName = "Subject \(project.layers.count + 1)"
+            } else {
+                layerName = image.subjectDescription
+            }
+
+            let newLayer = CompositionLayer(
+                name: layerName,
+                order: project.layers.count,
+                imageData: data,
+                type: .subject,
+                processedImageID: image.id,
+                project: project
+            )
+
+            project.layers.append(newLayer)
+            context.insert(newLayer)
+        }
+
+        normalizeOrder(in: project)
+        saveAsync()
+    }
+
+    func addTextLayer(text: String, fontSize: Double, color: String) {
+        guard let context = modelContext, let project = activeProject else { return }
+
+        // Create an image representation of the text
+        let textImage = renderTextToImage(
+            text: text,
+            fontSize: fontSize,
+            colorHex: color
+        )
+
+        guard let imageData = textImage.pngData() else {
+            errorMessage = "Failed to create text layer"
+            showError = true
+            return
+        }
+
+        let newLayer = CompositionLayer(
+            name: text.isEmpty ? "Text \(project.layers.count + 1)" : text,
+            order: project.layers.count,
+            imageData: imageData,
+            type: .text,
+            project: project,
+            textContent: text,
+            textFontSize: fontSize,
+            textColor: color
+        )
+
+        project.layers.append(newLayer)
+        project.touch()
+        context.insert(newLayer)
+
+        do {
+            try context.save()
+        } catch {
+            context.delete(newLayer)
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+
+    func generateObjectLayer(prompt: String, service: String) async {
+        guard let context = modelContext, let project = activeProject else { return }
+
+        // TODO: Integrate with nano bannanna API
+        // For now, create a placeholder layer
+        // This will need to be replaced with actual API integration
+
+        // Create a placeholder image
+        let placeholderSize = CGSize(width: 512, height: 512)
+        let renderer = UIGraphicsImageRenderer(size: placeholderSize)
+        let placeholderImage = renderer.image { context in
+            context.cgContext.setFillColor(UIColor.systemGray5.cgColor)
+            context.cgContext.fill(CGRect(origin: .zero, size: placeholderSize))
+
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 24),
+                .foregroundColor: UIColor.systemGray
+            ]
+            let string = NSAttributedString(string: "Object: \(prompt)", attributes: attributes)
+            let textSize = string.size()
+            let textRect = CGRect(
+                x: (placeholderSize.width - textSize.width) / 2,
+                y: (placeholderSize.height - textSize.height) / 2,
+                width: textSize.width,
+                height: textSize.height
+            )
+            string.draw(in: textRect)
+        }
+
+        guard let imageData = placeholderImage.pngData() else {
+            errorMessage = "Failed to create object layer"
+            showError = true
+            return
+        }
+
+        let newLayer = CompositionLayer(
+            name: "Object: \(prompt.prefix(20))",
+            order: project.layers.count,
+            imageData: imageData,
+            type: .object,
+            project: project,
+            objectPrompt: prompt,
+            objectGenerationService: service
+        )
+
+        project.layers.append(newLayer)
+        project.touch()
+        context.insert(newLayer)
+
+        do {
+            try context.save()
+        } catch {
+            context.delete(newLayer)
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+
+    private func renderTextToImage(text: String, fontSize: Double, colorHex: String) -> UIImage {
+        let font = UIFont.systemFont(ofSize: CGFloat(fontSize))
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: colorFromHex(colorHex) ?? .black
+        ]
+
+        let attributedString = NSAttributedString(string: text, attributes: attributes)
+        let size = attributedString.size()
+
+        // Add padding
+        let padding: CGFloat = 20
+        let imageSize = CGSize(
+            width: size.width + padding * 2,
+            height: size.height + padding * 2
+        )
+
+        let renderer = UIGraphicsImageRenderer(size: imageSize)
+        return renderer.image { context in
+            context.cgContext.setFillColor(UIColor.clear.cgColor)
+            context.cgContext.fill(CGRect(origin: .zero, size: imageSize))
+
+            let textRect = CGRect(
+                x: padding,
+                y: padding,
+                width: size.width,
+                height: size.height
+            )
+            attributedString.draw(in: textRect)
+        }
+    }
+
+    private func colorFromHex(_ hex: String) -> UIColor? {
+        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
+
+        var rgb: UInt64 = 0
+
+        guard Scanner(string: hexSanitized).scanHexInt64(&rgb) else {
+            return nil
+        }
+
+        return UIColor(
+            red: CGFloat((rgb & 0xFF0000) >> 16) / 255.0,
+            green: CGFloat((rgb & 0x00FF00) >> 8) / 255.0,
+            blue: CGFloat(rgb & 0x0000FF) / 255.0,
+            alpha: 1.0
+        )
     }
 
     func cleanLayer(_ layer: CompositionLayer) {
