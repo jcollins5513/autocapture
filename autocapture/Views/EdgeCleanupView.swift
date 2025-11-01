@@ -454,8 +454,6 @@ struct EdgeCleanupView: View {
     private let magnificationAmount: CGFloat = 2.5
     @State private var lastBrushImagePoint: CGPoint?
     @State private var magnifierTouchLocation: CGPoint?
-    private let magnifierOffsetX: CGFloat = 20
-    private let magnifierOffsetY: CGFloat = -80
     private let lassoPointSpacing: CGFloat = 18
     private let lassoSnapRatio: CGFloat = 1.8
 
@@ -550,19 +548,19 @@ struct EdgeCleanupView: View {
         if editingMode == .lasso {
             let viewPoints = lassoViewPoints(in: geometry)
             if viewPoints.count > 1 {
-            let path = Path { path in
-                path.addLines(viewPoints)
-                if let first = viewPoints.first {
-                    path.addLine(to: first)
+                let path = Path { path in
+                    path.addLines(viewPoints)
+                    if let first = viewPoints.first {
+                        path.addLine(to: first)
+                    }
                 }
-            }
 
-            path
-                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
-                .overlay(
-                    path
-                        .fill(Color.accentColor.opacity(0.1))
-                )
+                path
+                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .overlay(
+                        path
+                            .fill(Color.accentColor.opacity(0.1))
+                    )
             }
         }
     }
@@ -753,11 +751,7 @@ struct EdgeCleanupView: View {
                 guard !isZooming else { return }
                 // Only process gestures that are within the image bounds
                 guard let mapping = imageCoordinate(from: value.location, in: geometry) else { return }
-                
-                // Only process gestures that are within the image bounds
-                guard let mapping = imageCoordinate(from: value.location, in: geometry) else { return }
-                let displaySize = viewModel.previewImage.size
-                let workingPoint = viewModel.convertToWorking(point: mapping.point, in: displaySize)
+
                 if !isDrawing {
                     viewModel.beginEditingSession()
                     isDrawing = true
@@ -770,6 +764,8 @@ struct EdgeCleanupView: View {
 
                 switch editingMode {
                 case .add, .erase:
+                    let displaySize = viewModel.previewImage.size
+                    let workingPoint = viewModel.convertToWorking(point: mapping.point, in: displaySize)
                     let previous = lastBrushImagePoint
                     let brushSizeImageSpace = brushSizeInImageSpace(for: mapping.scale)
                     viewModel.applyStroke(
@@ -803,13 +799,11 @@ struct EdgeCleanupView: View {
                     fingerLocation = nil
                     return
                 }
-                let displaySize = viewModel.previewImage.size
 
                 switch editingMode {
                 case .add, .erase:
                     Self.logger.debug("Stroke completed.")
                 case .lasso:
-                    let workingPoint = viewModel.convertToWorking(point: mapping.point, in: displaySize)
                     lassoImagePoints.append(mapping.point)
 
                     if lassoImagePoints.count > 2 {
@@ -824,8 +818,6 @@ struct EdgeCleanupView: View {
                 // Clean up drawing state
                 isDrawing = false
                 lassoImagePoints = []
-                magnifierState = nil
-                fingerLocation = nil
                 magnifierState = nil
                 fingerLocation = nil
                 lastBrushImagePoint = nil
