@@ -15,6 +15,8 @@ final class CompositionLayer {
         case background
         case adjustment
         case upload
+        case text
+        case object
 
         var id: String { rawValue }
     }
@@ -32,6 +34,17 @@ final class CompositionLayer {
     var isVisible: Bool
     var typeRawValue: String
     var processedImageID: UUID?
+
+    // Text layer properties (optional to support migration)
+    var textContent: String?
+    var textFontName: String?
+    var textFontSize: Double?
+    var textColor: String? // Hex color string
+    var textAlignment: String? // "left", "center", "right"
+
+    // Object layer properties (optional to support migration)
+    var objectPrompt: String?
+    var objectGenerationService: String? // e.g., "nano_bannanna"
 
     @Attribute(.externalStorage)
     var imageData: Data
@@ -51,7 +64,14 @@ final class CompositionLayer {
         isLocked: Bool = false,
         isVisible: Bool = true,
         processedImageID: UUID? = nil,
-        project: CompositionProject? = nil
+        project: CompositionProject? = nil,
+        textContent: String? = nil,
+        textFontName: String? = nil,
+        textFontSize: Double? = nil,
+        textColor: String? = nil,
+        textAlignment: String? = nil,
+        objectPrompt: String? = nil,
+        objectGenerationService: String? = nil
     ) {
         self.id = UUID()
         self.createdAt = Date()
@@ -68,6 +88,13 @@ final class CompositionLayer {
         self.imageData = imageData
         self.processedImageID = processedImageID
         self.project = project
+        self.textContent = textContent
+        self.textFontName = textFontName
+        self.textFontSize = textFontSize
+        self.textColor = textColor
+        self.textAlignment = textAlignment
+        self.objectPrompt = objectPrompt
+        self.objectGenerationService = objectGenerationService
     }
 
     var type: LayerType {

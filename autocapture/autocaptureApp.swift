@@ -48,6 +48,7 @@ struct AutoCaptureApp: App {
             if shouldResetStore(for: error) {
                 do {
                     resetStoreFiles(in: supportDirectory, baseName: "AutoCapture.store")
+                    resetStoreFiles(in: supportDirectory, baseName: "AutoCapture_v2.store")
 
                     return try ModelContainer(for: schema, configurations: [configuration])
                 } catch {
