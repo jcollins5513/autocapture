@@ -103,29 +103,33 @@ enum SessionCompositionService {
             return 1.0
         }
 
-        // Calculate scale to fit vehicle within 35-40% of canvas (leaving very generous margins)
-        // This prevents vehicles from appearing too zoomed in - vehicles should be prominent
-        // but not fill the entire frame
-        let margin: CGFloat = 0.38
-        let maxWidth = canvasSize.width * margin
-        let maxHeight = canvasSize.height * margin
-
-        let widthScale = maxWidth / vehicleSize.width
-        let heightScale = maxHeight / vehicleSize.height
-
-        // Use the smaller scale to ensure vehicle fits within both dimensions
-        let optimalScale = min(widthScale, heightScale)
-
-        // Apply an additional safety multiplier to ensure vehicles are not too large
-        // Even after fitting to 38%, we scale down by another 15% for extra margin
-        let safetyMultiplier: Double = 0.85
-        let scaledResult = optimalScale * safetyMultiplier
-
-        // Clamp between 0.1 and 1.2 for reasonable bounds (further reduced max)
-        let clampedScale = max(0.1, min(1.2, Double(scaledResult)))
+        // Calculate scale to make vehicle approximately 50% of the canvas height
+        // This ensures vehicles are visible and prominent but leave room for background
+        // We use a fixed target size approach that works regardless of canvas dimensions
+        
+        // Use canvas height as reference (more consistent across aspect ratios)
+        let canvasReferenceSize = canvasSize.height
+        
+        // Target: vehicle should take up 50% of canvas height
+        let targetVehicleHeight = canvasReferenceSize * 0.5
+        
+        // Calculate scale based on vehicle's natural height
+        // This gives us a scale factor that makes the vehicle's height = targetVehicleHeight
+        let scale = targetVehicleHeight / vehicleSize.height
+        
+        // Also check width to ensure vehicle fits horizontally
+        let scaledWidth = vehicleSize.width * CGFloat(scale)
+        let maxWidth = canvasSize.width * 0.85  // Leave 15% margin on sides
+        
+        // If scaled width is too large, reduce scale to fit
+        let finalScale = scaledWidth > maxWidth ? maxWidth / vehicleSize.width : scale
+        
+        // Clamp to reasonable bounds (between 0.3 and 1.0)
+        // Scale of 1.0 means vehicle uses its natural size
+        let clampedScale = max(0.3, min(1.0, Double(finalScale)))
         
         logger.debug(
-            "Scale calculation: vehicleSize=\(vehicleSize.debugDescription, privacy: .public) canvasSize=\(canvasSize.debugDescription, privacy: .public) margin=\(margin, privacy: .public) calculatedScale=\(optimalScale, privacy: .public) safetyMultiplier=\(safetyMultiplier, privacy: .public) scaledResult=\(scaledResult, privacy: .public) clampedScale=\(clampedScale, privacy: .public)"
+            "Scale calculation: vehicleSize=\(vehicleSize.debugDescription, privacy: .public) canvasSize=\(canvasSize.debugDescription, privacy: .public) targetHeight=\(targetVehicleHeight, privacy: .public) initialScale=\(scale, privacy: .public) scaledWidth=\(scaledWidth, privacy: .public) maxWidth=\(maxWidth, privacy: .public) finalScale=\(finalScale, privacy: .public) clampedScale=\(clampedScale, privacy: .public)"
         )
         
         return clampedScale

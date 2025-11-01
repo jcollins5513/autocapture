@@ -523,15 +523,42 @@ struct VisualEditorView: View {
     }
 
     private func exportComposition() {
-        guard canvasSize != .zero else { return }
-        VisualEditorView.logger.debug("Export started. canvasSize=\(String(describing: canvasSize), privacy: .public)")
-        guard let image = viewModel.renderCompositeImage(size: canvasSize) else {
+        // Use the proper export canvas size based on background aspect ratio
+        // This ensures the export matches what we see in SessionDetailView
+        let exportCanvasSize: CGSize
+        if let background = project.background {
+            exportCanvasSize = canvasSizeForAspectRatio(background.aspectRatio)
+        } else {
+            // Fallback to default 16:9 if no background
+            exportCanvasSize = canvasSizeForAspectRatio("16:9")
+        }
+        
+        VisualEditorView.logger.debug("Export started. exportCanvasSize=\(String(describing: exportCanvasSize), privacy: .public)")
+        guard let image = viewModel.renderCompositeImage(size: exportCanvasSize) else {
             viewModel.errorMessage = "Unable to export the current composition."
             viewModel.showError = true
             return
         }
         shareItem = ExportShareItem(image: image)
         VisualEditorView.logger.debug("Export finished. renderedSize=\(image.size.debugDescription, privacy: .public)")
+    }
+    
+    private func canvasSizeForAspectRatio(_ aspectRatio: String) -> CGSize {
+        // Use high-resolution canvas sizes for export quality
+        switch aspectRatio {
+        case "1:1":
+            return CGSize(width: 2048, height: 2048)
+        case "3:2":
+            return CGSize(width: 2560, height: 1707)
+        case "4:5":
+            return CGSize(width: 2048, height: 2560)
+        case "9:16":
+            return CGSize(width: 2048, height: 3584)
+        case "16:9":
+            return CGSize(width: 3584, height: 2016)
+        default:
+            return CGSize(width: 3584, height: 2016) // Default to 16:9
+        }
     }
 
     @MainActor
