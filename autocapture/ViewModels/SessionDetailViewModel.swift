@@ -14,181 +14,111 @@ import Combine
 
 @MainActor
 final class SessionDetailViewModel: ObservableObject {
-    @Published var isGeneratingBackground = false
-    @Published var isCreatingCompositions = false
-    @Published var isExporting = false
+    @Published var isUploading = false
+    @Published var uploadProgress: Double = 0
+    @Published var uploadResults: [UploadOutcome] = []
     @Published var errorMessage: String?
     @Published var showError = false
-    @Published var showExportSheet = false
-    @Published var exportImages: [UIImage] = []
 
-    @Published var selectedCategory: BackgroundCategory = .automotive
-    @Published var subjectDescription: String = ""
-    @Published var aspectRatio: String = "16:9"
-    @Published var shareWithCommunity = true
-
-    private let backgroundGenerationService: BackgroundGenerationService
+    private let uploadService: WebCompanionUploadService
     private let logger = Logger(subsystem: "com.autocapture", category: "SessionDetailViewModel")
 
-    init(backgroundGenerationService: BackgroundGenerationService? = nil, session: CaptureSession? = nil) {
-        self.backgroundGenerationService = backgroundGenerationService ?? BackgroundGenerationService()
-        if let session, let primaryCategory = session.primaryCategory {
-            self.selectedCategory = primaryCategory
+    struct UploadOutcome: Identifiable {
+        enum Status {
+            case success
+            case failed
         }
+
+        let id = UUID()
+        let filename: String
+        let status: Status
+        let message: String
+        let processedUrl: String?
     }
 
-    func generateBackgroundAndApplyToAllVehicles(
-        session: CaptureSession,
-        context: ModelContext
-    ) async {
+    init(uploadService: WebCompanionUploadService = WebCompanionUploadService()) {
+        self.uploadService = uploadService
+    }
+
+    func uploadSession(_ session: CaptureSession, context: ModelContext) async {
         guard session.images.isEmpty == false else {
-            errorMessage = "No vehicles found in this session. Please capture images first."
+            errorMessage = "No captures found for this session. Capture photos before uploading."
             showError = true
             return
         }
 
-        isGeneratingBackground = true
-        defer { isGeneratingBackground = false }
+        isUploading = true
+        uploadProgress = 0
+        defer { isUploading = false }
 
-        do {
-            // Generate background
-            let request = BackgroundGenerationRequest(
-                category: selectedCategory,
-                subjectDescription: subjectDescription,
-                aspectRatio: aspectRatio,
-                shareWithCommunity: shareWithCommunity,
-                session: session
-            )
+        let images = session.images.sorted(by: { $0.captureDate < $1.captureDate })
+        let totalCount = Double(images.count)
+        var completedCount = 0.0
 
-            let result = try await backgroundGenerationService.generateBackground(for: request)
-
-            // Save background to session
-            context.insert(result.background)
-            session.generatedBackgrounds.append(result.background)
-            try context.save()
-
-            // Apply to all vehicles
-            await applyBackgroundToAllVehicles(
-                session: session,
-                background: result.background,
-                context: context
-            )
-        } catch {
-            errorMessage = error.localizedDescription
-            showError = true
-        }
-    }
-
-    func applyBackgroundToAllVehicles(
-        session: CaptureSession,
-        background: GeneratedBackground,
-        context: ModelContext
-    ) async {
-        guard session.images.isEmpty == false else {
-            errorMessage = "No vehicles found in this session."
-            showError = true
-            return
-        }
-
-        isCreatingCompositions = true
-        defer { isCreatingCompositions = false }
-
-        do {
-            // Calculate canvas size from aspect ratio
-            let canvasSize = canvasSizeForAspectRatio(background.aspectRatio)
-
-            // Create compositions for all vehicles
-            _ = try SessionCompositionService.createCompositionsForAllVehicles(
-                session: session,
-                background: background,
-                canvasSize: canvasSize,
-                context: context
-            )
-
-            logger.info(
-                "Successfully created compositions for all vehicles in session \(session.stockNumber)"
-            )
-        } catch {
-            errorMessage = error.localizedDescription
-            showError = true
-        }
-    }
-
-    func updateCompositionScales(session: CaptureSession, context: ModelContext) async {
-        isCreatingCompositions = true
-        defer { isCreatingCompositions = false }
-        
-        do {
-            let canvasSize: CGSize
-            if let firstBackground = session.compositions.first?.background {
-                canvasSize = canvasSizeForAspectRatio(firstBackground.aspectRatio)
-            } else {
-                canvasSize = canvasSizeForAspectRatio("16:9")
+        for (index, image) in images.enumerated() {
+            guard let uiImage = image.originalImage ?? image.image else {
+                let message = "Skipping image \(image.id.uuidString) because data could not be loaded."
+                logger.error("\(message)")
+                uploadResults.insert(
+                    UploadOutcome(
+                        filename: "capture-\(index + 1).png",
+                        status: .failed,
+                        message: message,
+                        processedUrl: nil
+                    ),
+                    at: 0
+                )
+                continue
             }
-            
-            try SessionCompositionService.updateScalesForExistingCompositions(
-                session: session,
-                canvasSize: canvasSize,
-                context: context
-            )
-            
-            logger.info("Successfully updated scales for compositions in session \(session.stockNumber)")
-        } catch {
-            errorMessage = error.localizedDescription
-            showError = true
-        }
-    }
-    
-    func exportAllCompositions(session: CaptureSession) {
-        guard session.compositions.isEmpty == false else {
-            errorMessage = "No compositions found. Please create compositions first."
-            showError = true
-            return
-        }
 
-        isExporting = true
-        defer { isExporting = false }
+            let filename = makeFilename(for: image, at: index, stockNumber: session.stockNumber)
 
-        // Use default canvas size (16:9) or get from first composition's background
-        let canvasSize: CGSize
-        if let firstBackground = session.compositions.first?.background {
-            canvasSize = canvasSizeForAspectRatio(firstBackground.aspectRatio)
-        } else {
-            canvasSize = canvasSizeForAspectRatio("16:9")
-        }
+            do {
+                let upload = try await uploadService.upload(
+                    image: uiImage,
+                    stockNumber: session.stockNumber,
+                    filename: filename
+                )
 
-        let images = SessionCompositionService.exportAllCompositions(
-            session: session,
-            canvasSize: canvasSize
-        )
+                uploadResults.insert(
+                    UploadOutcome(
+                        filename: filename,
+                        status: .success,
+                        message: "Uploaded to web companion queue",
+                        processedUrl: upload.processedUrl
+                    ),
+                    at: 0
+                )
+            } catch {
+                let message = error.localizedDescription
+                logger.error("Upload failed for \(filename, privacy: .public): \(message, privacy: .public)")
+                uploadResults.insert(
+                    UploadOutcome(
+                        filename: filename,
+                        status: .failed,
+                        message: message,
+                        processedUrl: nil
+                    ),
+                    at: 0
+                )
+                errorMessage = message
+                showError = true
+            }
 
-        guard images.isEmpty == false else {
-            errorMessage = "Failed to export compositions."
-            showError = true
-            return
+            completedCount += 1
+            uploadProgress = completedCount / totalCount
         }
 
-        exportImages = images
-        showExportSheet = true
-        logger.info("Exported \(images.count) compositions from session \(session.stockNumber)")
+        session.status = .completed
+        session.touch()
+        try? context.save()
     }
 
-    private func canvasSizeForAspectRatio(_ aspectRatio: String) -> CGSize {
-        // Use high-resolution canvas sizes for export quality
-        switch aspectRatio {
-        case "1:1":
-            return CGSize(width: 2048, height: 2048)
-        case "3:2":
-            return CGSize(width: 2560, height: 1707)
-        case "4:5":
-            return CGSize(width: 2048, height: 2560)
-        case "9:16":
-            return CGSize(width: 2048, height: 3584)
-        case "16:9":
-            return CGSize(width: 3584, height: 2016)
-        default:
-            return CGSize(width: 3584, height: 2016) // Default to 16:9
-        }
+    private func makeFilename(for image: ProcessedImage, at index: Int, stockNumber: String) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
+        let timestamp = dateFormatter.string(from: image.captureDate)
+        return "\(stockNumber)_\(timestamp)_\(index + 1).jpg"
     }
 }
 

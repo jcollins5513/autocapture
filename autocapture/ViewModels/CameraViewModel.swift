@@ -13,7 +13,6 @@ import SwiftUI
 @MainActor
 class CameraViewModel: ObservableObject {
     let cameraService = CameraService()
-    private let backgroundRemovalService = BackgroundRemovalService()
 
     @Published var isProcessing = false
     @Published var errorMessage: String?
@@ -22,7 +21,6 @@ class CameraViewModel: ObservableObject {
     @Published var currentZoomFactor: CGFloat = 1.0
     @Published var activeSession: CaptureSession?
     @Published var subjectDescription: String = ""
-    @Published var subjectMode: CaptureSubjectMode = .singleSubject
 
     private var modelContext: ModelContext?
 
@@ -81,34 +79,14 @@ class CameraViewModel: ObservableObject {
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
 
-            switch subjectMode {
-            case .singleSubject:
-                let result = try await backgroundRemovalService.extractForeground(from: photo, allowMultipleSubjects: false)
-                saveProcessedImage(
-                    result.foregroundImage,
-                    isSubjectLifted: true,
-                    captureMode: .singleSubject,
-                    originalImage: result.originalImage,
-                    maskImage: result.maskImage
-                )
-            case .multiSubject:
-                let result = try await backgroundRemovalService.extractForeground(from: photo, allowMultipleSubjects: true)
-                saveProcessedImage(
-                    result.foregroundImage,
-                    isSubjectLifted: true,
-                    captureMode: .multiSubject,
-                    originalImage: result.originalImage,
-                    maskImage: result.maskImage
-                )
-            case .fullScene:
-                saveProcessedImage(
-                    photo,
-                    isSubjectLifted: false,
-                    captureMode: .fullScene,
-                    originalImage: nil,
-                    maskImage: nil
-                )
-            }
+            // Save the original capture without background removal or generation
+            saveProcessedImage(
+                photo,
+                isSubjectLifted: false,
+                captureMode: .fullScene,
+                originalImage: photo,
+                maskImage: nil
+            )
 
             isProcessing = false
         } catch let error as CameraError {
