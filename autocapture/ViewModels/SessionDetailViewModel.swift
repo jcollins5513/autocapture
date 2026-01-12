@@ -173,6 +173,56 @@ final class SessionDetailViewModel: ObservableObject {
         logger.info("Exported \(images.count) compositions from session \(session.stockNumber)")
     }
 
+    func uploadLiftedSubjects(session: CaptureSession) async {
+        guard session.images.isEmpty == false else {
+            errorMessage = "No images found in this session."
+            showError = true
+            return
+        }
+
+        let liftedImages = session.images.filter { $0.isSubjectLifted }
+        
+        guard liftedImages.isEmpty == false else {
+            errorMessage = "No subject-lifted images found to upload."
+            showError = true
+            return
+        }
+
+        isExporting = true
+        defer { isExporting = false }
+
+        var successCount = 0
+        var failureCount = 0
+        
+        for (index, image) in liftedImages.enumerated() {
+            guard let imageData = image.imageData as Data? else { continue }
+            
+            do {
+                try await WebCompanionService.uploadImage(
+                    imageData: imageData,
+                    stockNumber: session.stockNumber,
+                    isProcessed: true,
+                    filename: "lifted-subject-\(index + 1).png"
+                )
+                successCount += 1
+            } catch {
+                logger.error("Failed to upload image \(index): \(error.localizedDescription)")
+                failureCount += 1
+            }
+        }
+        
+        if failureCount > 0 {
+            if successCount > 0 {
+                errorMessage = "Uploaded \(successCount) images, but \(failureCount) failed."
+            } else {
+                errorMessage = "Failed to upload images. Check your connection."
+            }
+            showError = true
+        } else {
+            logger.info("Successfully uploaded \(successCount) lifted subjects to Web Companion")
+        }
+    }
+
     private func canvasSizeForAspectRatio(_ aspectRatio: String) -> CGSize {
         // Use high-resolution canvas sizes for export quality
         switch aspectRatio {

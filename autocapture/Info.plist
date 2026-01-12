@@ -4,5 +4,10 @@
 <dict>
 	<key>WEB_COMPANION_BASE_URL</key>
 	<string>https://www.supercenter.cc</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
