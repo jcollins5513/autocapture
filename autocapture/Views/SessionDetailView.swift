@@ -10,241 +10,587 @@ import SwiftUI
 import UIKit
 
 struct SessionDetailView: View {
-    @Environment(\.modelContext)
-    private var modelContext
-    @Bindable var session: CaptureSession
-    @StateObject private var viewModel: SessionDetailViewModel
+  @Environment(\.modelContext)
+  private var modelContext
+  @Bindable var session: CaptureSession
+  @StateObject private var viewModel: SessionDetailViewModel
 
-    @State private var showCamera = false
-    @State private var selectedStatus: CaptureSession.Status
+  @State private var showCamera = false
+  @State private var showCaptureSelection = false
+  @State private var pendingProject: CompositionProject?
+  @State private var editorPresentation: EditorPresentation?
+  @State private var captureSelection: Set<UUID> = []
+  @State private var selectedStatus: CaptureSession.Status
+  @State private var showPostGeneration = false
 
-    private let gridColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+  private let gridColumns = [
+    GridItem(.flexible(), spacing: 12),
+    GridItem(.flexible(), spacing: 12),
+  ]
 
-    init(session: CaptureSession) {
-        self._session = Bindable(session)
-        self._selectedStatus = State(initialValue: session.status)
-        self._viewModel = StateObject(wrappedValue: SessionDetailViewModel())
+  private struct EditorPresentation: Identifiable {
+    let id = UUID()
+    let project: CompositionProject
+    let selectedImageIDs: Set<UUID>
+  }
+
+  init(session: CaptureSession) {
+    self._session = Bindable(session)
+    self._selectedStatus = State(initialValue: session.status)
+    self._viewModel = StateObject(wrappedValue: SessionDetailViewModel(session: session))
+  }
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 24) {
+        headerSection
+        batchOperationsSection
+        capturedImagesSection
+        generatedBackgroundSection
+        compositionsSection
+        uploadSection
+      }
+      .padding(.horizontal)
+      .padding(.bottom, 32)
     }
+    .navigationTitle(session.title)
+    .toolbar {
+      ToolbarItemGroup(placement: .primaryAction) {
+        Button {
+          showCamera = true
+        } label: {
+          Label("Capture", systemImage: "camera")
+        }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                headerSection
-                uploadSection
-                capturedImagesSection
+        Button {
+          openEditor()
+        } label: {
+          Label("Edit", systemImage: "paintbrush.pointed")
+        }
+        .disabled(session.images.isEmpty)
+
+        Menu {
+          Button {
+            viewModel.exportAllCompositions(session: session)
+          } label: {
+            Label("Export All", systemImage: "square.and.arrow.up")
+          }
+          .disabled(session.compositions.isEmpty)
+
+          Button {
+            Task {
+              await viewModel.uploadLiftedSubjects(session: session)
             }
-            .padding(.horizontal)
-            .padding(.bottom, 32)
+          } label: {
+            Label("Upload Lifted Subjects", systemImage: "icloud.and.arrow.up")
+          }
+          .disabled(session.images.filter { $0.isSubjectLifted }.isEmpty)
+
+          Divider()
+
+          Button {
+            showPostGeneration = true
+          } label: {
+            Label("Generate Social Media Post", systemImage: "square.and.pencil")
+          }
+        } label: {
+          Image(systemName: "ellipsis.circle")
         }
-        .navigationTitle(session.title)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    showCamera = true
-                } label: {
-                    Label("Capture", systemImage: "camera")
-                }
-                Button {
-                    Task {
-                        await viewModel.uploadSession(session, context: modelContext)
-                    }
-                } label: {
-                    Label("Complete & Upload", systemImage: "icloud.and.arrow.up")
-                }
-                .disabled(session.images.isEmpty || viewModel.isUploading)
-            }
-        }
-        .sheet(isPresented: $showCamera) {
-            NavigationStack {
-                CameraView(session: session)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { showCamera = false }
-                        }
-                    }
-            }
-        }
-        .onChange(of: selectedStatus) { _, newValue in
-            session.status = newValue
-            session.touch()
-            try? modelContext.save()
-        }
-        .alert("Error", isPresented: $viewModel.showError) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(viewModel.errorMessage ?? "An unknown error occurred")
-        }
+      }
     }
-
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            headerSummary
-            headerCategories
-        }
-        .padding(.top, 24)
-    }
-
-    private var headerSummary: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(session.stockNumber)
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                if session.notes.isEmpty == false {
-                    Text(session.notes)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+    .sheet(isPresented: $showCamera) {
+      NavigationStack {
+        CameraView(session: session)
+          .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+              Button("Done") { showCamera = false }
             }
-            Spacer()
-            Picker("Status", selection: $selectedStatus) {
-                ForEach(CaptureSession.Status.allCases) { status in
-                    Text(status.displayName).tag(status)
-                }
-            }
-            .pickerStyle(.menu)
-        }
+          }
+      }
     }
-
-    @ViewBuilder private var headerCategories: some View {
-        if session.categories.isEmpty == false {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(session.categories, id: \.self) { raw in
-                        if let category = BackgroundCategory(rawValue: raw) {
-                            Label(category.displayName, systemImage: "rectangle.3.group")
-                                .font(.caption)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(RoundedRectangle(cornerRadius: 12).fill(Color.gray.opacity(0.12)))
-                        }
-                    }
-                }
+    .sheet(isPresented: $showCaptureSelection) {
+      NavigationStack {
+        if let project = pendingProject {
+          CaptureSelectionView(
+            images: session.images.sorted(by: { $0.captureDate > $1.captureDate }),
+            selectedIDs: $captureSelection
+          ) {
+            let selection = captureSelection
+            editorPresentation = EditorPresentation(project: project, selectedImageIDs: selection)
+            showCaptureSelection = false
+            pendingProject = nil
+          }
+        } else {
+          ContentUnavailableView("No Project", systemImage: "exclamationmark.triangle")
+            .toolbar {
+              ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { showCaptureSelection = false }
+              }
             }
         }
+      }
     }
+    .sheet(item: $editorPresentation) { presentation in
+      NavigationStack {
+        VisualEditorView(
+          project: presentation.project,
+          session: session,
+          selectedImageIDs: presentation.selectedImageIDs
+        )
+      }
+    }
+    .onChange(of: selectedStatus) { _, newValue in
+      session.status = newValue
+      session.touch()
+      try? modelContext.save()
+    }
+    .onChange(of: showCaptureSelection) { _, isPresented in
+      if isPresented == false {
+        pendingProject = nil
+      }
+    }
+    .alert("Error", isPresented: $viewModel.showError) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text(viewModel.errorMessage ?? "An unknown error occurred")
+    }
+    .sheet(isPresented: $viewModel.showExportSheet) {
+      if viewModel.exportImages.isEmpty == false {
+        ActivityView(activityItems: viewModel.exportImages)
+      }
+    }
+    .sheet(isPresented: $showPostGeneration) {
+      PostGenerationView(session: session)
+    }
+  }
 
-    private var capturedImagesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+  private var headerSection: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      headerSummary
+      headerCategories
+    }
+    .padding(.top, 24)
+  }
+
+  private var headerSummary: some View {
+    HStack(alignment: .top) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(session.stockNumber)
+          .font(.title2)
+          .fontWeight(.semibold)
+        if session.notes.isEmpty == false {
+          Text(session.notes)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+      }
+      Spacer()
+      Picker("Status", selection: $selectedStatus) {
+        ForEach(CaptureSession.Status.allCases) { status in
+          Text(status.displayName).tag(status)
+        }
+      }
+      .pickerStyle(.menu)
+    }
+  }
+
+  @ViewBuilder private var headerCategories: some View {
+    if session.categories.isEmpty == false {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 8) {
+          ForEach(session.categories, id: \.self) { raw in
+            if let category = BackgroundCategory(rawValue: raw) {
+              Label(category.displayName, systemImage: "rectangle.3.group")
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.gray.opacity(0.12)))
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private var capturedImagesSection: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Text("Captured Subjects")
+          .font(.title3)
+          .fontWeight(.semibold)
+        Spacer()
+        Button {
+          openEditor()
+        } label: {
+          Label("Open Editor", systemImage: "rectangle.stack.badge.plus")
+        }
+        .disabled(session.images.isEmpty)
+      }
+
+      if session.images.isEmpty {
+        ContentUnavailableView(
+          "No Captures",
+          systemImage: "photo.badge.plus",
+          description: Text("Capture lifted subjects to populate this session.")
+        )
+        .frame(maxWidth: .infinity)
+      } else {
+        LazyVGrid(columns: gridColumns, spacing: 12) {
+          ForEach(session.images.sorted(by: { $0.captureDate > $1.captureDate })) { image in
+            CapturedImageCard(processedImage: image)
+          }
+        }
+      }
+    }
+  }
+
+  private var uploadSection: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Text("Send Captures to Web Companion")
+          .font(.title3)
+          .fontWeight(.semibold)
+        Spacer()
+      }
+
+      Text("Optionally upload the original captures to the web companion queue for browser-side processing.")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+
+      if viewModel.isUploading {
+        VStack(alignment: .leading, spacing: 8) {
+          ProgressView(value: viewModel.uploadProgress)
+          Text("\(Int(viewModel.uploadProgress * 100))% complete")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      Button {
+        Task {
+          await viewModel.uploadSession(session, context: modelContext)
+        }
+      } label: {
+        HStack {
+          if viewModel.isUploading {
+            ProgressView()
+              .tint(.white)
+          }
+          Text(viewModel.isUploading ? "Uploading..." : "Upload Originals")
+        }
+        .frame(maxWidth: .infinity)
+      }
+      .buttonStyle(.borderedProminent)
+      .disabled(session.images.isEmpty || viewModel.isUploading)
+
+      if session.images.isEmpty {
+        Text("Capture at least one photo before uploading.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+
+      if viewModel.uploadResults.isEmpty == false {
+        Divider()
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(viewModel.uploadResults) { result in
             HStack {
-                Text("Captured Photos")
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                Spacer()
+              Image(systemName: result.status == .success ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                .foregroundStyle(result.status == .success ? .green : .red)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(result.filename)
+                  .font(.subheadline)
+                  .fontWeight(.semibold)
+                Text(result.message)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                if let processedUrl = result.processedUrl {
+                  Text(processedUrl)
+                    .font(.caption2)
+                    .foregroundStyle(.blue)
+                }
+              }
             }
+          }
+        }
+      }
+    }
+    .padding()
+    .background(RoundedRectangle(cornerRadius: 12).fill(Color(.systemGray6)))
+  }
 
-            if session.images.isEmpty {
-                ContentUnavailableView(
-                    "No Captures",
-                    systemImage: "photo.badge.plus",
-                    description: Text("Capture lifted subjects to populate this session.")
+  private var batchOperationsSection: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text("Batch Operations")
+        .font(.title3)
+        .fontWeight(.semibold)
+
+      VStack(spacing: 12) {
+        // Background generation form
+        VStack(alignment: .leading, spacing: 12) {
+          Picker("Category", selection: $viewModel.selectedCategory) {
+            ForEach(BackgroundCategory.allCases) { category in
+              Text(category.displayName).tag(category)
+            }
+          }
+          .pickerStyle(.menu)
+
+          TextField("Describe the environment (optional)", text: $viewModel.subjectDescription)
+            .textFieldStyle(.roundedBorder)
+
+          Picker("Aspect Ratio", selection: $viewModel.aspectRatio) {
+            Text("16:9").tag("16:9")
+            Text("3:2").tag("3:2")
+            Text("4:5").tag("4:5")
+            Text("9:16").tag("9:16")
+            Text("1:1").tag("1:1")
+          }
+          .pickerStyle(.menu)
+        }
+
+        // Generate and Apply button
+        Button {
+          Task {
+            await viewModel.generateBackgroundAndApplyToAllVehicles(
+              session: session,
+              context: modelContext
+            )
+          }
+        } label: {
+          HStack {
+            if viewModel.isGeneratingBackground || viewModel.isCreatingCompositions {
+              ProgressView()
+                .scaleEffect(0.8)
+            }
+            Text(
+              viewModel.isGeneratingBackground
+                ? "Generating Background..."
+                : viewModel.isCreatingCompositions
+                  ? "Applying to Vehicles..."
+                  : "Generate Background & Apply to All Vehicles"
+            )
+          }
+          .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(
+          session.images.isEmpty
+            || viewModel.isGeneratingBackground
+            || viewModel.isCreatingCompositions
+        )
+
+        // Apply existing background to all vehicles
+        if session.generatedBackgrounds.isEmpty == false {
+          Menu {
+            ForEach(
+              session.generatedBackgrounds.sorted(by: { $0.createdAt > $1.createdAt })
+            ) { background in
+              Button {
+                Task {
+                  await viewModel.applyBackgroundToAllVehicles(
+                    session: session,
+                    background: background,
+                    context: modelContext
+                  )
+                }
+              } label: {
+                Label(
+                  "Apply \(background.category.displayName)",
+                  systemImage: "rectangle.3.group"
                 )
-                .frame(maxWidth: .infinity)
-            } else {
-                LazyVGrid(columns: gridColumns, spacing: 12) {
-                    ForEach(session.images.sorted(by: { $0.captureDate > $1.captureDate })) { image in
-                        CapturedImageCard(processedImage: image)
-                    }
-                }
+              }
+              .disabled(viewModel.isCreatingCompositions)
             }
-        }
-    }
-
-    private var uploadSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+          } label: {
             HStack {
-                Text("Send Captures to Web Companion")
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                Spacer()
+              if viewModel.isCreatingCompositions {
+                ProgressView()
+                  .scaleEffect(0.8)
+              }
+              Text(
+                viewModel.isCreatingCompositions
+                  ? "Applying..."
+                  : "Apply Existing Background to All Vehicles"
+              )
             }
+            .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.bordered)
+          .disabled(
+            session.images.isEmpty || viewModel.isGeneratingBackground
+              || viewModel.isCreatingCompositions
+          )
+        }
+      }
+      .padding()
+      .background(RoundedRectangle(cornerRadius: 12).fill(Color(.systemGray6)))
+    }
+  }
 
-            Text("Uploads are sent to /api/web-companion/uploads and background removal runs in the browser session.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+  private var generatedBackgroundSection: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Text("Generated Backgrounds")
+          .font(.title3)
+          .fontWeight(.semibold)
+        Spacer()
+        Button {
+          openEditor()
+        } label: {
+          Label("Generate", systemImage: "sparkles")
+        }
+      }
 
-            if viewModel.isUploading {
-                VStack(alignment: .leading, spacing: 8) {
-                    ProgressView(value: viewModel.uploadProgress)
-                    Text("\(Int(viewModel.uploadProgress * 100))% complete")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+      if session.generatedBackgrounds.isEmpty {
+        Text("Generated backgrounds for this stock number will appear here.")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+      } else {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 16) {
+            ForEach(session.generatedBackgrounds.sorted(by: { $0.createdAt > $1.createdAt })) {
+              background in
+              GeneratedBackgroundCard(background: background)
+                .onTapGesture {
+                  ensureProject()?.background = background
+                  openEditor()
                 }
             }
+          }
+          .padding(.vertical, 4)
+        }
+      }
+    }
+  }
+
+  private var compositionsSection: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Compositions")
+        .font(.title3)
+        .fontWeight(.semibold)
+
+      if session.compositions.isEmpty == false {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 12) {
+            Button {
+              viewModel.exportAllCompositions(session: session)
+            } label: {
+              Label("Export All", systemImage: "square.and.arrow.up")
+            }
+            .disabled(viewModel.isExporting)
 
             Button {
-                Task {
-                    await viewModel.uploadSession(session, context: modelContext)
-                }
+              Task {
+                await viewModel.updateCompositionScales(session: session, context: modelContext)
+              }
             } label: {
-                HStack {
-                    if viewModel.isUploading {
-                        ProgressView()
-                            .tint(.white)
-                    }
-                    Text(viewModel.isUploading ? "Uploading..." : "Complete & Upload")
-                }
-                .frame(maxWidth: .infinity)
+              Label("Fix Scaling", systemImage: "arrow.down.right.and.arrow.up.left")
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(session.images.isEmpty || viewModel.isUploading)
+            .disabled(viewModel.isCreatingCompositions)
 
-            if session.images.isEmpty {
-                Text("Capture at least one photo before uploading.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Button {
+              showPostGeneration = true
+            } label: {
+              Label("Generate Post", systemImage: "square.and.pencil")
             }
-
-            if viewModel.uploadResults.isEmpty == false {
-                Divider()
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(viewModel.uploadResults) { result in
-                        HStack {
-                            Image(systemName: result.status == .success ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                                .foregroundStyle(result.status == .success ? .green : .red)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(result.filename)
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                Text(result.message)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                if let processedUrl = result.processedUrl {
-                                    Text(processedUrl)
-                                        .font(.caption2)
-                                        .foregroundStyle(.blue)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+          }
+          .padding(.horizontal, 1)  // Add tiny padding to prevent clipping of borders
         }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.systemGray6)))
+        .buttonStyle(.bordered)
+      }
+
+      if session.compositions.isEmpty {
+        Text("Compositions will appear here after applying backgrounds to vehicles.")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+      } else {
+        LazyVGrid(columns: gridColumns, spacing: 12) {
+          ForEach(
+            session.compositions.sorted(by: { $0.createdAt > $1.createdAt })
+          ) { composition in
+            CompositionCard(composition: composition, canvasSize: defaultCanvasSize)
+          }
+        }
+      }
     }
+  }
+
+  private var defaultCanvasSize: CGSize {
+    if let firstBackground = session.compositions.first?.background {
+      return canvasSizeForAspectRatio(firstBackground.aspectRatio)
+    }
+    return CGSize(width: 3584, height: 2016)  // Default 16:9
+  }
+
+  private func canvasSizeForAspectRatio(_ aspectRatio: String) -> CGSize {
+    switch aspectRatio {
+    case "1:1":
+      return CGSize(width: 2048, height: 2048)
+    case "3:2":
+      return CGSize(width: 2560, height: 1707)
+    case "4:5":
+      return CGSize(width: 2048, height: 2560)
+    case "9:16":
+      return CGSize(width: 2048, height: 3584)
+    case "16:9":
+      return CGSize(width: 3584, height: 2016)
+    default:
+      return CGSize(width: 3584, height: 2016)
+    }
+  }
+
+  private func openEditor() {
+    guard let project = ensureProject() else { return }
+    pendingProject = project
+
+    let sessionImageIDs = Set(session.images.map(\.id))
+    let existingLayerIDs = Set(project.layers.compactMap { $0.processedImageID })
+    if existingLayerIDs.isEmpty {
+      captureSelection = sessionImageIDs
+    } else {
+      let intersection = existingLayerIDs.intersection(sessionImageIDs)
+      captureSelection = intersection.isEmpty ? sessionImageIDs : intersection
+    }
+
+    showCaptureSelection = true
+  }
+
+  private func ensureProject() -> CompositionProject? {
+    if let existing = session.compositions.max(by: { $0.createdAt < $1.createdAt }) {
+      return existing
+    }
+
+    let project = CompositionProject(name: "Composition \(session.stockNumber)", session: session)
+    modelContext.insert(project)
+    session.compositions.append(project)
+    do {
+      try modelContext.save()
+      return project
+    } catch {
+      modelContext.delete(project)
+      return nil
+    }
+  }
 }
 #Preview {
-    let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
-    guard let container = try? ModelContainer(
-        for: CaptureSession.self,
-        ProcessedImage.self,
-        GeneratedBackground.self,
-        CompositionProject.self,
-        CompositionLayer.self,
-        configurations: configuration
-    ) else {
-        return NavigationStack {
-            Text("Preview unavailable")
-        }
-    }
-
-    let session = CaptureSession(stockNumber: "ABC123", title: "ABC123", notes: "Premium package")
+  let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+  guard
+    let container = try? ModelContainer(
+      for: CaptureSession.self,
+      ProcessedImage.self,
+      GeneratedBackground.self,
+      CompositionProject.self,
+      CompositionLayer.self,
+      configurations: configuration
+    )
+  else {
     return NavigationStack {
-        SessionDetailView(session: session)
+      Text("Preview unavailable")
     }
-    .modelContainer(container)
+  }
+
+  let session = CaptureSession(stockNumber: "ABC123", title: "ABC123", notes: "Premium package")
+  return NavigationStack {
+    SessionDetailView(session: session)
+  }
+  .modelContainer(container)
 }
