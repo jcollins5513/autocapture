@@ -10,9 +10,22 @@
 		CD1936062E9EAC2E00C8381F /* autocapture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = autocapture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		CDEEE6D22F130E79005EC2B5 /* Exceptions for "autocapture" folder in "autocapture" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = CD1936052E9EAC2E00C8381F /* autocapture */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		CD1936082E9EAC2E00C8381F /* autocapture */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CDEEE6D22F130E79005EC2B5 /* Exceptions for "autocapture" folder in "autocapture" target */,
+			);
 			path = autocapture;
 			sourceTree = "<group>";
 		};
