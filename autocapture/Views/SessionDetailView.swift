@@ -14,6 +14,8 @@ struct SessionDetailView: View {
   private var modelContext
   @Bindable var session: CaptureSession
   @StateObject private var viewModel: SessionDetailViewModel
+  @Query(filter: #Predicate<GeneratedBackground> { $0.isDefault == true })
+  private var defaultBackgrounds: [GeneratedBackground]
 
   @State private var showCamera = false
   @State private var showCaptureSelection = false
@@ -347,36 +349,62 @@ struct SessionDetailView: View {
           .pickerStyle(.menu)
         }
 
-        // Generate and Apply button
+        // Generate button — stores the result so the user can review it and
+        // keep generating until one looks right, then apply it below.
         Button {
           Task {
-            await viewModel.generateBackgroundAndApplyToAllVehicles(
-              session: session,
-              context: modelContext
-            )
+            await viewModel.generateBackground(session: session, context: modelContext)
           }
         } label: {
           HStack {
-            if viewModel.isGeneratingBackground || viewModel.isCreatingCompositions {
+            if viewModel.isGeneratingBackground {
               ProgressView()
                 .scaleEffect(0.8)
             }
             Text(
               viewModel.isGeneratingBackground
                 ? "Generating Background..."
-                : viewModel.isCreatingCompositions
-                  ? "Applying to Vehicles..."
-                  : "Generate Background & Apply to All Vehicles"
+                : session.generatedBackgrounds.isEmpty
+                  ? "Generate Background"
+                  : "Generate Another Background"
             )
           }
           .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
-        .disabled(
-          session.images.isEmpty
-            || viewModel.isGeneratingBackground
-            || viewModel.isCreatingCompositions
-        )
+        .disabled(viewModel.isGeneratingBackground || viewModel.isCreatingCompositions)
+
+        // One-tap reuse of the background chosen as the default for all sessions
+        if let defaultBackground = defaultBackgrounds.first {
+          Button {
+            Task {
+              await viewModel.applyBackgroundToAllVehicles(
+                session: session,
+                background: defaultBackground,
+                context: modelContext
+              )
+            }
+          } label: {
+            HStack {
+              if viewModel.isCreatingCompositions {
+                ProgressView()
+                  .scaleEffect(0.8)
+              }
+              Label(
+                viewModel.isCreatingCompositions
+                  ? "Applying..."
+                  : "Use Default Background for All Photos",
+                systemImage: "star.fill"
+              )
+            }
+            .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.bordered)
+          .disabled(
+            session.images.isEmpty || viewModel.isGeneratingBackground
+              || viewModel.isCreatingCompositions
+          )
+        }
 
         // Apply existing background to all vehicles
         if session.generatedBackgrounds.isEmpty == false {
@@ -440,24 +468,87 @@ struct SessionDetailView: View {
         }
       }
 
-      if session.generatedBackgrounds.isEmpty {
-        Text("Generated backgrounds for this stock number will appear here.")
+      if displayedBackgrounds.isEmpty {
+        Text("Generate a background above. Every generation is kept here so you can compare and pick the one you like.")
           .font(.subheadline)
           .foregroundStyle(.secondary)
       } else {
         ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 16) {
-            ForEach(session.generatedBackgrounds.sorted(by: { $0.createdAt > $1.createdAt })) {
-              background in
-              GeneratedBackgroundCard(background: background)
-                .onTapGesture {
-                  ensureProject()?.background = background
-                  openEditor()
-                }
+          HStack(alignment: .top, spacing: 16) {
+            ForEach(displayedBackgrounds) { background in
+              backgroundPickerCard(for: background)
             }
           }
           .padding(.vertical, 4)
         }
+      }
+    }
+  }
+
+  /// This session's generations (newest first), with the saved cross-session
+  /// default prepended when it came from an earlier session.
+  private var displayedBackgrounds: [GeneratedBackground] {
+    let own = session.generatedBackgrounds.sorted(by: { $0.createdAt > $1.createdAt })
+    let ownIDs = Set(own.map(\.id))
+    let inheritedDefaults = defaultBackgrounds.filter { ownIDs.contains($0.id) == false }
+    return inheritedDefaults + own
+  }
+
+  private func backgroundPickerCard(for background: GeneratedBackground) -> some View {
+    VStack(spacing: 8) {
+      GeneratedBackgroundCard(background: background)
+        .overlay(alignment: .topTrailing) {
+          if background.isDefault {
+            Label("Default", systemImage: "star.fill")
+              .font(.caption2)
+              .fontWeight(.semibold)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 4)
+              .background(Capsule().fill(Color.yellow.opacity(0.9)))
+              .foregroundStyle(.black)
+              .padding(8)
+          }
+        }
+        .onTapGesture {
+          ensureProject()?.background = background
+          openEditor()
+        }
+
+      HStack(spacing: 8) {
+        Button {
+          Task {
+            await viewModel.applyBackgroundToAllVehicles(
+              session: session,
+              background: background,
+              context: modelContext
+            )
+          }
+        } label: {
+          Label("Use", systemImage: "rectangle.3.group")
+            .font(.caption)
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(
+          session.images.isEmpty || viewModel.isGeneratingBackground
+            || viewModel.isCreatingCompositions
+        )
+
+        Button {
+          if background.isDefault {
+            viewModel.clearDefaultBackground(background, context: modelContext)
+          } else {
+            viewModel.setDefaultBackground(background, context: modelContext)
+          }
+        } label: {
+          Image(systemName: background.isDefault ? "star.fill" : "star")
+            .font(.caption)
+        }
+        .buttonStyle(.bordered)
+        .help(
+          background.isDefault
+            ? "Stop using this background for new sessions"
+            : "Use this background for all later sessions"
+        )
       }
     }
   }

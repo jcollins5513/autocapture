@@ -17,6 +17,8 @@ final class GeneratedBackground {
     var categoryRawValue: String
     var aspectRatio: String
     var isCommunityShared: Bool
+    // Marks the one background the user chose to reuse for all later sessions.
+    var isDefault: Bool = false
     @Attribute(.externalStorage)
     var imageData: Data?
     @Relationship(deleteRule: .nullify, inverse: \CaptureSession.generatedBackgrounds)
@@ -27,6 +29,7 @@ final class GeneratedBackground {
         category: BackgroundCategory,
         aspectRatio: String = "16:9",
         isCommunityShared: Bool = false,
+        isDefault: Bool = false,
         session: CaptureSession? = nil,
         imageData: Data? = nil
     ) {
@@ -37,6 +40,7 @@ final class GeneratedBackground {
         self.categoryRawValue = category.rawValue
         self.aspectRatio = aspectRatio
         self.isCommunityShared = isCommunityShared
+        self.isDefault = isDefault
         self.session = session
         self.imageData = imageData
     }

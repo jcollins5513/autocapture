@@ -63,17 +63,25 @@ final class SessionDetailViewModel: ObservableObject {
         session: CaptureSession,
         context: ModelContext
     ) async {
-        guard session.images.isEmpty == false else {
-            errorMessage = "No vehicles found in this session. Please capture images first."
-            showError = true
+        guard let background = await generateBackground(session: session, context: context) else {
             return
         }
 
+        await applyBackgroundToAllVehicles(
+            session: session,
+            background: background,
+            context: context
+        )
+    }
+
+    /// Generates a background and stores it on the session without applying it,
+    /// so the user can keep generating until they find one they like.
+    @discardableResult
+    func generateBackground(session: CaptureSession, context: ModelContext) async -> GeneratedBackground? {
         isGeneratingBackground = true
         defer { isGeneratingBackground = false }
 
         do {
-            // Generate background
             let request = BackgroundGenerationRequest(
                 category: selectedCategory,
                 subjectDescription: subjectDescription,
@@ -84,17 +92,45 @@ final class SessionDetailViewModel: ObservableObject {
 
             let result = try await backgroundGenerationService.generateBackground(for: request)
 
-            // Save background to session
+            // Save background to session; generations are kept even when the
+            // user regenerates, building up a library to pick from.
             context.insert(result.background)
             session.generatedBackgrounds.append(result.background)
             try context.save()
+            return result.background
+        } catch {
+            errorMessage = error.localizedDescription
+            showError = true
+            return nil
+        }
+    }
 
-            // Apply to all vehicles
-            await applyBackgroundToAllVehicles(
-                session: session,
-                background: result.background,
-                context: context
+    /// Marks a background as the reusable default for all later sessions,
+    /// clearing the flag from any previously chosen background.
+    func setDefaultBackground(_ background: GeneratedBackground, context: ModelContext) {
+        do {
+            let descriptor = FetchDescriptor<GeneratedBackground>(
+                predicate: #Predicate { $0.isDefault == true }
             )
+            for existing in try context.fetch(descriptor) where existing.id != background.id {
+                existing.isDefault = false
+                existing.touch()
+            }
+            background.isDefault = true
+            background.touch()
+            try context.save()
+            logger.info("Set default background \(background.id.uuidString, privacy: .public)")
+        } catch {
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+
+    func clearDefaultBackground(_ background: GeneratedBackground, context: ModelContext) {
+        background.isDefault = false
+        background.touch()
+        do {
+            try context.save()
         } catch {
             errorMessage = error.localizedDescription
             showError = true
