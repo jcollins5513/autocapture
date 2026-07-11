@@ -91,3 +91,6 @@ iOSInjectionProject/
 
 # macOS
 .DS_Store
+
+# Local secrets (API keys) — copy Secrets.example.plist to autocapture/Secrets.plist
+autocapture/Secrets.plist

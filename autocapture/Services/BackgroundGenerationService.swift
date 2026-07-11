@@ -75,7 +75,7 @@ final class BackgroundGenerationService {
         var errorDescription: String? {
             switch self {
             case .missingAPIKey:
-                return "Missing OpenAI API key. Please configure the OPENAI_API_KEY environment variable."
+                return "Missing OpenAI API key. Add OPENAI_API_KEY to autocapture/Secrets.plist (copy it from Secrets.example.plist)."
             case .requestFailed:
                 return "The background generation request failed."
             case .invalidResponse:
@@ -93,8 +93,8 @@ final class BackgroundGenerationService {
 
     init(
         urlSession: URLSession = .shared,
-        apiKeyProvider: @escaping () -> String? = { ProcessInfo.processInfo.environment["OPENAI_API_KEY"] },
-        organizationProvider: @escaping () -> String? = { ProcessInfo.processInfo.environment["OPENAI_ORG_ID"] }
+        apiKeyProvider: @escaping () -> String? = { Secrets.value(for: "OPENAI_API_KEY") },
+        organizationProvider: @escaping () -> String? = { Secrets.value(for: "OPENAI_ORG_ID") }
     ) {
         self.urlSession = urlSession
         self.apiKeyProvider = apiKeyProvider
