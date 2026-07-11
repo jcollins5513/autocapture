@@ -33,7 +33,7 @@ struct DraggableLayerView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(isSelected ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: isSelected ? 2 : 0)
             )
-            .gesture(
+            .highPriorityGesture(
                 SimultaneousGesture(
                     DragGesture()
                         .onChanged { value in

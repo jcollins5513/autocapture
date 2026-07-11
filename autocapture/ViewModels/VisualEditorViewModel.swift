@@ -26,6 +26,9 @@ final class VisualEditorViewModel: ObservableObject {
     @Published private(set) var backgroundLibrary: [BackgroundCategory: [GeneratedBackground]] = [:]
     @Published var isImportingLayer = false
     @Published private(set) var cleaningLayerIDs: Set<UUID> = []
+    @Published var showInfo = false
+    @Published var infoMessage: String?
+    @Published private(set) var canUndo = false
 
     @Published var activeProject: CompositionProject?
 
@@ -532,6 +535,7 @@ final class VisualEditorViewModel: ObservableObject {
     }
 
     func update(layer: CompositionLayer, offset: CGSize, scale: CGFloat, rotation: Angle) {
+        pushUndo([layer])
         layer.offsetX = offset.width
         layer.offsetY = offset.height
         layer.scale = scale
@@ -547,6 +551,169 @@ final class VisualEditorViewModel: ObservableObject {
                     self?.showError = true
                 }
             }
+        }
+    }
+
+    // MARK: - Transform editing, undo & placement sync
+
+    private struct LayerTransform {
+        let id: UUID
+        let offsetX: Double
+        let offsetY: Double
+        let scale: Double
+        let rotation: Double
+    }
+
+    private var undoStack: [[LayerTransform]] = []
+    private let maxUndoSteps = 40
+
+    private func snapshot(of layers: [CompositionLayer]) -> [LayerTransform] {
+        layers.map {
+            LayerTransform(id: $0.id, offsetX: $0.offsetX, offsetY: $0.offsetY, scale: $0.scale, rotation: $0.rotation)
+        }
+    }
+
+    private func pushUndo(_ layers: [CompositionLayer]) {
+        guard layers.isEmpty == false else { return }
+        undoStack.append(snapshot(of: layers))
+        if undoStack.count > maxUndoSteps {
+            undoStack.removeFirst(undoStack.count - maxUndoSteps)
+        }
+        canUndo = true
+    }
+
+    func undo() {
+        guard let restored = undoStack.popLast() else { return }
+        let layers = activeProject?.layers ?? []
+        for saved in restored {
+            guard let layer = layers.first(where: { $0.id == saved.id }) else { continue }
+            layer.offsetX = saved.offsetX
+            layer.offsetY = saved.offsetY
+            layer.scale = saved.scale
+            layer.rotation = saved.rotation
+        }
+        activeProject?.touch()
+        canUndo = undoStack.isEmpty == false
+        persist()
+    }
+
+    /// The main subject layer for a composition (lowest-order `.subject` layer,
+    /// falling back to the bottom-most layer).
+    func primarySubjectLayer(in project: CompositionProject) -> CompositionLayer? {
+        let subjects = project.layers.filter { $0.type == .subject }.sorted { $0.order < $1.order }
+        return subjects.first ?? project.layers.sorted { $0.order < $1.order }.first
+    }
+
+    /// Called when an interactive edit (slider drag) begins, so a single undo
+    /// step covers the whole drag rather than every intermediate value.
+    func beginTransformEdit(for layer: CompositionLayer) {
+        pushUndo([layer])
+    }
+
+    func setScaleLive(_ value: Double, for layer: CompositionLayer) {
+        layer.scale = max(0.05, value)
+    }
+
+    func setRotationLive(_ value: Double, for layer: CompositionLayer) {
+        layer.rotation = value
+    }
+
+    func endTransformEdit(for layer: CompositionLayer) {
+        layer.project?.touch()
+        persist()
+    }
+
+    func nudge(_ layer: CompositionLayer, dx: Double, dy: Double) {
+        pushUndo([layer])
+        layer.offsetX += dx
+        layer.offsetY += dy
+        layer.project?.touch()
+        persist()
+    }
+
+    func resetTransform(for layer: CompositionLayer) {
+        pushUndo([layer])
+        layer.offsetX = 0
+        layer.offsetY = 0
+        layer.rotation = 0
+        if let image = UIImage(data: layer.imageData),
+           let aspect = layer.project?.background?.aspectRatio {
+            layer.scale = SessionCompositionService.calculateOptimalScale(
+                vehicleSize: image.size,
+                canvasSize: canvasSizeForAspectRatio(aspect)
+            )
+        }
+        layer.project?.touch()
+        persist()
+    }
+
+    /// Copies the current composition's subject placement (position, rotation,
+    /// and on-screen size) to every other composition in the session that uses
+    /// the same background. Size is matched visually — differently-sized source
+    /// images are scaled so they render at the same height.
+    @discardableResult
+    func applyPlacementToBackgroundSiblings(session: CaptureSession) -> Int {
+        guard let project = activeProject, let background = project.background else {
+            errorMessage = "Select a background before syncing placement."
+            showError = true
+            return 0
+        }
+        guard let source = primarySubjectLayer(in: project),
+              let sourceImage = UIImage(data: source.imageData),
+              sourceImage.size.height > 0 else {
+            errorMessage = "This composition has no subject to copy placement from."
+            showError = true
+            return 0
+        }
+
+        let targetRenderedHeight = sourceImage.size.height * source.scale
+        let siblingLayers: [CompositionLayer] = session.compositions
+            .filter { $0.id != project.id && $0.background?.id == background.id }
+            .compactMap { primarySubjectLayer(in: $0) }
+
+        guard siblingLayers.isEmpty == false else {
+            infoMessage = "No other photos are using this background yet."
+            showInfo = true
+            return 0
+        }
+
+        pushUndo(siblingLayers)
+        for layer in siblingLayers {
+            layer.offsetX = source.offsetX
+            layer.offsetY = source.offsetY
+            layer.rotation = source.rotation
+            if let image = UIImage(data: layer.imageData), image.size.height > 0 {
+                layer.scale = targetRenderedHeight / image.size.height
+            } else {
+                layer.scale = source.scale
+            }
+            layer.project?.touch()
+        }
+        persist()
+        let count = siblingLayers.count
+        infoMessage = "Applied this placement to \(count) other photo\(count == 1 ? "" : "s") on this background."
+        showInfo = true
+        return count
+    }
+
+    private func persist() {
+        guard let context = modelContext else { return }
+        do {
+            try context.save()
+        } catch {
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+
+    private func canvasSizeForAspectRatio(_ aspectRatio: String) -> CGSize {
+        switch aspectRatio {
+        case "1:1": return CGSize(width: 2048, height: 2048)
+        case "3:2": return CGSize(width: 2560, height: 1707)
+        case "4:5": return CGSize(width: 2048, height: 2560)
+        case "9:16": return CGSize(width: 2048, height: 3584)
+        case "16:9": return CGSize(width: 3584, height: 2016)
+        default: return CGSize(width: 3584, height: 2016)
         }
     }
 
