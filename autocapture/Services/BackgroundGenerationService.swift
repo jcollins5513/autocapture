@@ -251,19 +251,18 @@ final class BackgroundGenerationService {
 // swiftlint:enable function_body_length
 
     private func size(for aspectRatio: String) -> String {
+        // gpt-image-1 only supports 1024x1024, 1024x1536 (portrait),
+        // 1536x1024 (landscape), and auto. Map each requested aspect ratio to
+        // the nearest supported size by orientation.
         switch aspectRatio {
         case "1:1":
             return "1024x1024"
-        case "3:2":
-            return "1280x853"
-        case "4:5":
-            return "1024x1280"
-        case "9:16":
-            return "1024x1792"
-        case "16:9":
-            return "1792x1024"
+        case "4:5", "9:16":
+            return "1024x1536"
+        case "3:2", "16:9":
+            return "1536x1024"
         default:
-            return "1792x1024"
+            return "1536x1024"
         }
     }
 
