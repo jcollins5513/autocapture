@@ -20,18 +20,49 @@ struct DraggableLayerView: View {
     @State private var baseOffset: CGSize = .zero
     @State private var baseScale: CGFloat = 1.0
     @State private var baseRotation: Angle = .zero
+    // Subject footprint as fractions of the image, so the contact shadow hugs
+    // the subject instead of the transparent frame. Defaults to the full frame.
+    @State private var contentFraction = CGRect(x: 0, y: 0, width: 1, height: 1)
 
     var body: some View {
         Image(uiImage: image)
             .resizable()
             .scaledToFit()
+            .background {
+                if layer.type == .subject {
+                    GeometryReader { geo in
+                        let shadowWidth = geo.size.width * contentFraction.width * 0.95
+                        let shadowHeight = shadowWidth * 0.14
+                        let centerX = geo.size.width * contentFraction.midX
+                        let baseY = geo.size.height * contentFraction.maxY
+                        Ellipse()
+                            .fill(
+                                RadialGradient(
+                                    gradient: Gradient(colors: [Color.black.opacity(0.4), Color.black.opacity(0)]),
+                                    center: .center,
+                                    startRadius: 0,
+                                    endRadius: max(shadowWidth, 1) * 0.5
+                                )
+                            )
+                            .frame(width: max(shadowWidth, 1), height: max(shadowHeight, 1))
+                            .position(x: centerX, y: baseY - shadowHeight * 0.25)
+                            .blur(radius: 2)
+                            .allowsHitTesting(false)
+                    }
+                }
+            }
             .scaleEffect(currentScale)
             .rotationEffect(currentRotation)
             .offset(currentOffset)
-            .shadow(color: isSelected ? .accentColor.opacity(0.4) : .clear, radius: 12)
+            // Thin dashed outline marks selection without a glow that would
+            // obscure how the composite actually looks. Tap empty canvas to
+            // clear the selection for a fully clean preview.
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: isSelected ? 2 : 0)
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(
+                        isSelected ? Color.accentColor.opacity(0.9) : Color.clear,
+                        style: StrokeStyle(lineWidth: isSelected ? 1.5 : 0, dash: [6, 4])
+                    )
             )
             .highPriorityGesture(
                 SimultaneousGesture(
@@ -85,6 +116,10 @@ struct DraggableLayerView: View {
                 currentOffset = baseOffset
                 currentScale = baseScale
                 currentRotation = baseRotation
+                if layer.type == .subject,
+                   let fraction = SubjectGeometry.normalizedOpaqueBounds(of: image) {
+                    contentFraction = fraction
+                }
             }
             .onChange(of: layer.offsetX) { _, newValue in
                 baseOffset.width = newValue

@@ -93,7 +93,134 @@ enum CompositionRenderer {
         )
         logger.debug("Drawing layer. name=\(layer.name, privacy: .public) order=\(layer.order, privacy: .public) imageSize=\(imageSize.debugDescription, privacy: .public) offset=(\(offset.x, privacy: .public), \(offset.y, privacy: .public)) rotationDegrees=\(layer.rotation, privacy: .public) scale=\(layer.scale, privacy: .public) opacity=\(layer.opacity, privacy: .public)")
 
+        // Ground the subject with a soft contact shadow so it doesn't look like
+        // it's floating on the background. Drawn before the subject so the
+        // subject sits on top of it, and anchored to the subject's actual
+        // (non-transparent) footprint rather than the transparent image frame.
+        if layer.type == .subject {
+            let contentBounds = SubjectGeometry.opaqueBounds(of: image)
+                ?? CGRect(origin: .zero, size: imageSize)
+            // Faint mirrored reflection first, then the contact shadow on top of
+            // it near the tires, then the subject over both.
+            drawReflection(
+                image: image,
+                contentBounds: contentBounds,
+                imageSize: imageSize,
+                context: context,
+                opacity: layer.opacity
+            )
+            drawContactShadow(
+                contentBounds: contentBounds,
+                imageSize: imageSize,
+                context: context,
+                opacity: layer.opacity
+            )
+        }
+
         image.draw(in: drawRect)
+        context.restoreGState()
+    }
+
+    /// Draws a faint, downward-fading mirror of the subject under its base to
+    /// suggest a reflective showroom floor. Subtle so it reads as sheen on
+    /// matte floors and as a reflection on glossy ones.
+    private static func drawReflection(
+        image: UIImage,
+        contentBounds: CGRect,
+        imageSize: CGSize,
+        context: CGContext,
+        opacity: Double
+    ) {
+        guard contentBounds.height > 0, imageSize.height > 0 else { return }
+        let localBaseY = contentBounds.maxY - imageSize.height / 2
+        let reflectionOpacity = 0.16 * opacity
+        guard reflectionOpacity > 0 else { return }
+
+        context.saveGState()
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+
+        // Mirror the subject across its base line and draw it going downward.
+        context.saveGState()
+        context.translateBy(x: 0, y: 2 * localBaseY)
+        context.scaleBy(x: 1, y: -1)
+        context.setAlpha(reflectionOpacity)
+        image.draw(in: CGRect(
+            x: -imageSize.width / 2,
+            y: -imageSize.height / 2,
+            width: imageSize.width,
+            height: imageSize.height
+        ))
+        context.restoreGState()
+
+        // Fade the reflection out with distance from the base.
+        context.setBlendMode(.destinationOut)
+        let fadeColors = [
+            UIColor.black.withAlphaComponent(0.0).cgColor,
+            UIColor.black.withAlphaComponent(1.0).cgColor
+        ] as CFArray
+        if let fade = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: fadeColors,
+            locations: [0.0, 1.0]
+        ) {
+            context.drawLinearGradient(
+                fade,
+                start: CGPoint(x: 0, y: localBaseY),
+                end: CGPoint(x: 0, y: localBaseY + contentBounds.height * 0.5),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+        context.endTransparencyLayer()
+        context.restoreGState()
+    }
+
+    /// Draws a soft elliptical shadow pooled under the subject's footprint, in
+    /// the layer's already-transformed (centered) coordinate space so it tracks
+    /// the subject's position, scale, and rotation.
+    private static func drawContactShadow(
+        contentBounds: CGRect,
+        imageSize: CGSize,
+        context: CGContext,
+        opacity: Double
+    ) {
+        guard contentBounds.width > 0, contentBounds.height > 0 else { return }
+
+        let shadowWidth = contentBounds.width * 0.95
+        let shadowHeight = shadowWidth * 0.14
+        let radius = shadowWidth / 2
+        guard radius > 0, shadowHeight > 0 else { return }
+
+        // Local space is centered on the image, so convert the footprint's
+        // horizontal center and bottom edge into that space, then tuck the
+        // shadow just under the subject's base so it reads as contact.
+        let centerX = contentBounds.midX - imageSize.width / 2
+        let baseY = contentBounds.maxY - imageSize.height / 2
+        let centerY = baseY - shadowHeight * 0.25
+
+        let colors = [
+            UIColor.black.withAlphaComponent(0.45).cgColor,
+            UIColor.black.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        guard let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: colors,
+            locations: [0.0, 1.0]
+        ) else { return }
+
+        context.saveGState()
+        context.setAlpha(opacity)
+        // Center on the footprint base, then squash vertically so the radial
+        // gradient becomes a soft ellipse.
+        context.translateBy(x: centerX, y: centerY)
+        context.scaleBy(x: 1.0, y: shadowHeight / shadowWidth)
+        context.drawRadialGradient(
+            gradient,
+            startCenter: .zero,
+            startRadius: 0,
+            endCenter: .zero,
+            endRadius: radius,
+            options: []
+        )
         context.restoreGState()
     }
 }
