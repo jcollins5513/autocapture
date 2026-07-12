@@ -25,6 +25,25 @@ struct DraggableLayerView: View {
         Image(uiImage: image)
             .resizable()
             .scaledToFit()
+            .background(alignment: .bottom) {
+                if layer.type == .subject {
+                    GeometryReader { geo in
+                        Ellipse()
+                            .fill(
+                                RadialGradient(
+                                    gradient: Gradient(colors: [Color.black.opacity(0.4), Color.black.opacity(0)]),
+                                    center: .center,
+                                    startRadius: 0,
+                                    endRadius: max(geo.size.width, 1) * 0.5
+                                )
+                            )
+                            .frame(width: geo.size.width * 0.92, height: geo.size.height * 0.16)
+                            .position(x: geo.size.width / 2, y: geo.size.height * 0.97)
+                            .blur(radius: 3)
+                            .allowsHitTesting(false)
+                    }
+                }
+            }
             .scaleEffect(currentScale)
             .rotationEffect(currentRotation)
             .offset(currentOffset)

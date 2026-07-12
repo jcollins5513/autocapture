@@ -93,7 +93,56 @@ enum CompositionRenderer {
         )
         logger.debug("Drawing layer. name=\(layer.name, privacy: .public) order=\(layer.order, privacy: .public) imageSize=\(imageSize.debugDescription, privacy: .public) offset=(\(offset.x, privacy: .public), \(offset.y, privacy: .public)) rotationDegrees=\(layer.rotation, privacy: .public) scale=\(layer.scale, privacy: .public) opacity=\(layer.opacity, privacy: .public)")
 
+        // Ground the subject with a soft contact shadow so it doesn't look like
+        // it's floating on the background. Drawn before the subject so the
+        // subject sits on top of it.
+        if layer.type == .subject {
+            drawContactShadow(imageSize: imageSize, context: context, opacity: layer.opacity)
+        }
+
         image.draw(in: drawRect)
+        context.restoreGState()
+    }
+
+    /// Draws a soft elliptical shadow pooled under the subject, in the layer's
+    /// already-transformed (centered) coordinate space so it tracks the
+    /// subject's position, scale, and rotation.
+    private static func drawContactShadow(imageSize: CGSize, context: CGContext, opacity: Double) {
+        guard imageSize.width > 0, imageSize.height > 0 else { return }
+
+        let shadowWidth = imageSize.width * 0.92
+        let shadowHeight = imageSize.height * 0.16
+        let radius = shadowWidth / 2
+        guard radius > 0, shadowHeight > 0 else { return }
+
+        // Pool the shadow just under the subject's base (bottom of the image),
+        // nudged up slightly so it reads as contact rather than a cast shadow.
+        let baseY = imageSize.height / 2 - shadowHeight * 0.35
+
+        let colors = [
+            UIColor.black.withAlphaComponent(0.45).cgColor,
+            UIColor.black.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        guard let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: colors,
+            locations: [0.0, 1.0]
+        ) else { return }
+
+        context.saveGState()
+        context.setAlpha(opacity)
+        // Center on the base, then squash vertically so the radial gradient
+        // becomes a soft ellipse.
+        context.translateBy(x: 0, y: baseY)
+        context.scaleBy(x: 1.0, y: shadowHeight / shadowWidth)
+        context.drawRadialGradient(
+            gradient,
+            startCenter: .zero,
+            startRadius: 0,
+            endCenter: .zero,
+            endRadius: radius,
+            options: []
+        )
         context.restoreGState()
     }
 }
