@@ -100,6 +100,15 @@ enum CompositionRenderer {
         if layer.type == .subject {
             let contentBounds = SubjectGeometry.opaqueBounds(of: image)
                 ?? CGRect(origin: .zero, size: imageSize)
+            // Faint mirrored reflection first, then the contact shadow on top of
+            // it near the tires, then the subject over both.
+            drawReflection(
+                image: image,
+                contentBounds: contentBounds,
+                imageSize: imageSize,
+                context: context,
+                opacity: layer.opacity
+            )
             drawContactShadow(
                 contentBounds: contentBounds,
                 imageSize: imageSize,
@@ -109,6 +118,59 @@ enum CompositionRenderer {
         }
 
         image.draw(in: drawRect)
+        context.restoreGState()
+    }
+
+    /// Draws a faint, downward-fading mirror of the subject under its base to
+    /// suggest a reflective showroom floor. Subtle so it reads as sheen on
+    /// matte floors and as a reflection on glossy ones.
+    private static func drawReflection(
+        image: UIImage,
+        contentBounds: CGRect,
+        imageSize: CGSize,
+        context: CGContext,
+        opacity: Double
+    ) {
+        guard contentBounds.height > 0, imageSize.height > 0 else { return }
+        let localBaseY = contentBounds.maxY - imageSize.height / 2
+        let reflectionOpacity = 0.16 * opacity
+        guard reflectionOpacity > 0 else { return }
+
+        context.saveGState()
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+
+        // Mirror the subject across its base line and draw it going downward.
+        context.saveGState()
+        context.translateBy(x: 0, y: 2 * localBaseY)
+        context.scaleBy(x: 1, y: -1)
+        context.setAlpha(reflectionOpacity)
+        image.draw(in: CGRect(
+            x: -imageSize.width / 2,
+            y: -imageSize.height / 2,
+            width: imageSize.width,
+            height: imageSize.height
+        ))
+        context.restoreGState()
+
+        // Fade the reflection out with distance from the base.
+        context.setBlendMode(.destinationOut)
+        let fadeColors = [
+            UIColor.black.withAlphaComponent(0.0).cgColor,
+            UIColor.black.withAlphaComponent(1.0).cgColor
+        ] as CFArray
+        if let fade = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: fadeColors,
+            locations: [0.0, 1.0]
+        ) {
+            context.drawLinearGradient(
+                fade,
+                start: CGPoint(x: 0, y: localBaseY),
+                end: CGPoint(x: 0, y: localBaseY + contentBounds.height * 0.5),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+        context.endTransparencyLayer()
         context.restoreGState()
     }
 
