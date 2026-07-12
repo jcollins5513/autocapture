@@ -62,6 +62,7 @@ struct VisualEditorView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     backgroundGeneratorSection
                     canvasSection
+                    selectedLayerControls
                     layerControlsSection
                 }
                 .padding(.horizontal)
@@ -90,6 +91,13 @@ struct VisualEditorView: View {
                 Button("Done") { dismiss() }
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    viewModel.undo()
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .disabled(viewModel.canUndo == false)
+
                 Button {
                     exportComposition()
                 } label: {
@@ -176,6 +184,11 @@ struct VisualEditorView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(viewModel.errorMessage ?? "Unknown error")
+        }
+        .alert("Placement", isPresented: $viewModel.showInfo) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.infoMessage ?? "")
         }
         .sheet(isPresented: $showDocumentPicker) {
             DocumentPickerView { result in
@@ -351,6 +364,129 @@ struct VisualEditorView: View {
                 }
             }
         }
+    }
+
+    private var hasBackgroundSiblings: Bool {
+        guard let background = project.background else { return false }
+        return session.compositions.contains {
+            $0.id != project.id && $0.background?.id == background.id
+        }
+    }
+
+    @ViewBuilder private var selectedLayerControls: some View {
+        if let layer = selectedLayer, project.layers.contains(where: { $0.id == layer.id }) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Adjust: \(layer.name)")
+                        .font(.headline)
+                    Spacer()
+                    Button {
+                        viewModel.resetTransform(for: layer)
+                    } label: {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                            .font(.caption)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Label("Size", systemImage: "arrow.up.left.and.arrow.down.right")
+                        Spacer()
+                        Text("\(Int(layer.scale * 100))%")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { layer.scale },
+                            set: { viewModel.setScaleLive($0, for: layer) }
+                        ),
+                        in: 0.1...3.0,
+                        onEditingChanged: { editing in
+                            if editing {
+                                viewModel.beginTransformEdit(for: layer)
+                            } else {
+                                viewModel.endTransformEdit(for: layer)
+                            }
+                        }
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Label("Rotation", systemImage: "rotate.right")
+                        Spacer()
+                        Text("\(Int(layer.rotation))°")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { layer.rotation },
+                            set: { viewModel.setRotationLive($0, for: layer) }
+                        ),
+                        in: -180...180,
+                        onEditingChanged: { editing in
+                            if editing {
+                                viewModel.beginTransformEdit(for: layer)
+                            } else {
+                                viewModel.endTransformEdit(for: layer)
+                            }
+                        }
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Position", systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+                    positionPad(for: layer)
+                }
+
+                if hasBackgroundSiblings {
+                    Button {
+                        viewModel.applyPlacementToBackgroundSiblings(session: session)
+                    } label: {
+                        Label(
+                            "Apply Placement to All Photos on This Background",
+                            systemImage: "rectangle.on.rectangle.angled"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding()
+            .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+        }
+    }
+
+    private func positionPad(for layer: CompositionLayer) -> some View {
+        let step = 8.0
+        return Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            GridRow {
+                Color.clear.frame(width: 44, height: 44)
+                nudgeButton("chevron.up") { viewModel.nudge(layer, dx: 0, dy: -step) }
+                Color.clear.frame(width: 44, height: 44)
+            }
+            GridRow {
+                nudgeButton("chevron.left") { viewModel.nudge(layer, dx: -step, dy: 0) }
+                nudgeButton("scope") { viewModel.nudge(layer, dx: -layer.offsetX, dy: -layer.offsetY) }
+                nudgeButton("chevron.right") { viewModel.nudge(layer, dx: step, dy: 0) }
+            }
+            GridRow {
+                Color.clear.frame(width: 44, height: 44)
+                nudgeButton("chevron.down") { viewModel.nudge(layer, dx: 0, dy: step) }
+                Color.clear.frame(width: 44, height: 44)
+            }
+        }
+    }
+
+    private func nudgeButton(_ systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .frame(width: 44, height: 44)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color(.tertiarySystemBackground)))
+        }
+        .buttonStyle(.plain)
     }
 
     private var canvasSection: some View {

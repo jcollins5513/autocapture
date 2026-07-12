@@ -45,7 +45,9 @@ final class CaptureSession {
     var images: [ProcessedImage]
     @Relationship(deleteRule: .cascade)
     var compositions: [CompositionProject]
-    @Relationship(deleteRule: .cascade)
+    // Generated backgrounds are kept even if their session goes away so the
+    // user's library of generations (including the reusable default) survives.
+    @Relationship(deleteRule: .nullify)
     var generatedBackgrounds: [GeneratedBackground]
 
     init(stockNumber: String, title: String? = nil, notes: String = "", categories: [BackgroundCategory] = []) {

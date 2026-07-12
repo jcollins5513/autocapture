@@ -75,7 +75,7 @@ final class BackgroundGenerationService {
         var errorDescription: String? {
             switch self {
             case .missingAPIKey:
-                return "Missing OpenAI API key. Please configure the OPENAI_API_KEY environment variable."
+                return "Missing OpenAI API key. Add OPENAI_API_KEY to autocapture/Secrets.plist (copy it from Secrets.example.plist)."
             case .requestFailed:
                 return "The background generation request failed."
             case .invalidResponse:
@@ -93,8 +93,8 @@ final class BackgroundGenerationService {
 
     init(
         urlSession: URLSession = .shared,
-        apiKeyProvider: @escaping () -> String? = { ProcessInfo.processInfo.environment["OPENAI_API_KEY"] },
-        organizationProvider: @escaping () -> String? = { ProcessInfo.processInfo.environment["OPENAI_ORG_ID"] }
+        apiKeyProvider: @escaping () -> String? = { Secrets.value(for: "OPENAI_API_KEY") },
+        organizationProvider: @escaping () -> String? = { Secrets.value(for: "OPENAI_ORG_ID") }
     ) {
         self.urlSession = urlSession
         self.apiKeyProvider = apiKeyProvider
@@ -251,19 +251,18 @@ final class BackgroundGenerationService {
 // swiftlint:enable function_body_length
 
     private func size(for aspectRatio: String) -> String {
+        // gpt-image-1 only supports 1024x1024, 1024x1536 (portrait),
+        // 1536x1024 (landscape), and auto. Map each requested aspect ratio to
+        // the nearest supported size by orientation.
         switch aspectRatio {
         case "1:1":
             return "1024x1024"
-        case "3:2":
-            return "1280x853"
-        case "4:5":
-            return "1024x1280"
-        case "9:16":
-            return "1024x1792"
-        case "16:9":
-            return "1792x1024"
+        case "4:5", "9:16":
+            return "1024x1536"
+        case "3:2", "16:9":
+            return "1536x1024"
         default:
-            return "1792x1024"
+            return "1536x1024"
         }
     }
 
