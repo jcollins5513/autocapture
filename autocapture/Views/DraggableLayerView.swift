@@ -20,26 +20,33 @@ struct DraggableLayerView: View {
     @State private var baseOffset: CGSize = .zero
     @State private var baseScale: CGFloat = 1.0
     @State private var baseRotation: Angle = .zero
+    // Subject footprint as fractions of the image, so the contact shadow hugs
+    // the subject instead of the transparent frame. Defaults to the full frame.
+    @State private var contentFraction = CGRect(x: 0, y: 0, width: 1, height: 1)
 
     var body: some View {
         Image(uiImage: image)
             .resizable()
             .scaledToFit()
-            .background(alignment: .bottom) {
+            .background {
                 if layer.type == .subject {
                     GeometryReader { geo in
+                        let shadowWidth = geo.size.width * contentFraction.width * 0.95
+                        let shadowHeight = shadowWidth * 0.14
+                        let centerX = geo.size.width * contentFraction.midX
+                        let baseY = geo.size.height * contentFraction.maxY
                         Ellipse()
                             .fill(
                                 RadialGradient(
                                     gradient: Gradient(colors: [Color.black.opacity(0.4), Color.black.opacity(0)]),
                                     center: .center,
                                     startRadius: 0,
-                                    endRadius: max(geo.size.width, 1) * 0.5
+                                    endRadius: max(shadowWidth, 1) * 0.5
                                 )
                             )
-                            .frame(width: geo.size.width * 0.92, height: geo.size.height * 0.16)
-                            .position(x: geo.size.width / 2, y: geo.size.height * 0.97)
-                            .blur(radius: 3)
+                            .frame(width: max(shadowWidth, 1), height: max(shadowHeight, 1))
+                            .position(x: centerX, y: baseY - shadowHeight * 0.25)
+                            .blur(radius: 2)
                             .allowsHitTesting(false)
                     }
                 }
@@ -104,6 +111,10 @@ struct DraggableLayerView: View {
                 currentOffset = baseOffset
                 currentScale = baseScale
                 currentRotation = baseRotation
+                if layer.type == .subject,
+                   let fraction = SubjectGeometry.normalizedOpaqueBounds(of: image) {
+                    contentFraction = fraction
+                }
             }
             .onChange(of: layer.offsetX) { _, newValue in
                 baseOffset.width = newValue

@@ -95,29 +95,45 @@ enum CompositionRenderer {
 
         // Ground the subject with a soft contact shadow so it doesn't look like
         // it's floating on the background. Drawn before the subject so the
-        // subject sits on top of it.
+        // subject sits on top of it, and anchored to the subject's actual
+        // (non-transparent) footprint rather than the transparent image frame.
         if layer.type == .subject {
-            drawContactShadow(imageSize: imageSize, context: context, opacity: layer.opacity)
+            let contentBounds = SubjectGeometry.opaqueBounds(of: image)
+                ?? CGRect(origin: .zero, size: imageSize)
+            drawContactShadow(
+                contentBounds: contentBounds,
+                imageSize: imageSize,
+                context: context,
+                opacity: layer.opacity
+            )
         }
 
         image.draw(in: drawRect)
         context.restoreGState()
     }
 
-    /// Draws a soft elliptical shadow pooled under the subject, in the layer's
-    /// already-transformed (centered) coordinate space so it tracks the
-    /// subject's position, scale, and rotation.
-    private static func drawContactShadow(imageSize: CGSize, context: CGContext, opacity: Double) {
-        guard imageSize.width > 0, imageSize.height > 0 else { return }
+    /// Draws a soft elliptical shadow pooled under the subject's footprint, in
+    /// the layer's already-transformed (centered) coordinate space so it tracks
+    /// the subject's position, scale, and rotation.
+    private static func drawContactShadow(
+        contentBounds: CGRect,
+        imageSize: CGSize,
+        context: CGContext,
+        opacity: Double
+    ) {
+        guard contentBounds.width > 0, contentBounds.height > 0 else { return }
 
-        let shadowWidth = imageSize.width * 0.92
-        let shadowHeight = imageSize.height * 0.16
+        let shadowWidth = contentBounds.width * 0.95
+        let shadowHeight = shadowWidth * 0.14
         let radius = shadowWidth / 2
         guard radius > 0, shadowHeight > 0 else { return }
 
-        // Pool the shadow just under the subject's base (bottom of the image),
-        // nudged up slightly so it reads as contact rather than a cast shadow.
-        let baseY = imageSize.height / 2 - shadowHeight * 0.35
+        // Local space is centered on the image, so convert the footprint's
+        // horizontal center and bottom edge into that space, then tuck the
+        // shadow just under the subject's base so it reads as contact.
+        let centerX = contentBounds.midX - imageSize.width / 2
+        let baseY = contentBounds.maxY - imageSize.height / 2
+        let centerY = baseY - shadowHeight * 0.25
 
         let colors = [
             UIColor.black.withAlphaComponent(0.45).cgColor,
@@ -131,9 +147,9 @@ enum CompositionRenderer {
 
         context.saveGState()
         context.setAlpha(opacity)
-        // Center on the base, then squash vertically so the radial gradient
-        // becomes a soft ellipse.
-        context.translateBy(x: 0, y: baseY)
+        // Center on the footprint base, then squash vertically so the radial
+        // gradient becomes a soft ellipse.
+        context.translateBy(x: centerX, y: centerY)
         context.scaleBy(x: 1.0, y: shadowHeight / shadowWidth)
         context.drawRadialGradient(
             gradient,
