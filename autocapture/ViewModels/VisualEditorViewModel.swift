@@ -61,7 +61,7 @@ final class VisualEditorViewModel: ObservableObject {
                 selectedCategory = primary
             }
             // Removed automatic synchronization - users will manually add captures
-            loadBackgroundLibrary(excluding: session)
+            loadBackgroundLibrary()
         } else {
             generatedBackgrounds = []
             backgroundLibrary = [:]
@@ -170,6 +170,7 @@ final class VisualEditorViewModel: ObservableObject {
             activeProject?.background = result.background
             generatedBackgrounds.insert(result.background, at: 0)
             try modelContext.save()
+            loadBackgroundLibrary()
         } catch {
             errorMessage = error.localizedDescription
             showError = true
@@ -729,7 +730,10 @@ final class VisualEditorViewModel: ObservableObject {
         saveAsync()
     }
 
-    private func loadBackgroundLibrary(excluding session: CaptureSession) {
+    /// Loads every generated background (across all sessions, newest first)
+    /// into the browsable library, so recently generated backgrounds — including
+    /// ones from the current session — can be reused.
+    private func loadBackgroundLibrary() {
         guard let modelContext else {
             backgroundLibrary = [:]
             return
@@ -741,10 +745,9 @@ final class VisualEditorViewModel: ObservableObject {
 
         do {
             let backgrounds = try modelContext.fetch(descriptor)
-            let excludedIDs = Set(session.generatedBackgrounds.map(\.id))
             var grouped: [BackgroundCategory: [GeneratedBackground]] = [:]
 
-            for background in backgrounds where excludedIDs.contains(background.id) == false {
+            for background in backgrounds where background.imageData != nil {
                 var entries = grouped[background.category] ?? []
                 entries.append(background)
                 entries.sort { $0.createdAt > $1.createdAt }
@@ -761,6 +764,13 @@ final class VisualEditorViewModel: ObservableObject {
 
     func importBackgroundFromLibrary(_ background: GeneratedBackground, into session: CaptureSession) {
         guard let context = modelContext else { return }
+
+        // If the picked background already belongs to this session, just select
+        // it — no need to duplicate it.
+        if session.generatedBackgrounds.contains(where: { $0.id == background.id }) {
+            select(background: background)
+            return
+        }
 
         let copy = GeneratedBackground(
             prompt: background.prompt,
@@ -780,7 +790,7 @@ final class VisualEditorViewModel: ObservableObject {
 
         do {
             try context.save()
-            loadBackgroundLibrary(excluding: session)
+            loadBackgroundLibrary()
         } catch {
             context.delete(copy)
             generatedBackgrounds.removeAll { $0.id == copy.id }

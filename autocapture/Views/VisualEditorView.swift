@@ -516,6 +516,12 @@ struct VisualEditorView: View {
                     .cornerRadius(24)
             }
 
+            // Tapping empty canvas clears the selection so the composite can be
+            // previewed without the selection outline.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { selectedLayer = nil }
+
             ForEach(project.layers.sorted(by: { $0.order < $1.order })) { layer in
                 if layer.isVisible, let image = UIImage(data: layer.imageData) {
                     DraggableLayerView(

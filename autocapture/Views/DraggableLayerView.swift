@@ -54,10 +54,15 @@ struct DraggableLayerView: View {
             .scaleEffect(currentScale)
             .rotationEffect(currentRotation)
             .offset(currentOffset)
-            .shadow(color: isSelected ? .accentColor.opacity(0.4) : .clear, radius: 12)
+            // Thin dashed outline marks selection without a glow that would
+            // obscure how the composite actually looks. Tap empty canvas to
+            // clear the selection for a fully clean preview.
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: isSelected ? 2 : 0)
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(
+                        isSelected ? Color.accentColor.opacity(0.9) : Color.clear,
+                        style: StrokeStyle(lineWidth: isSelected ? 1.5 : 0, dash: [6, 4])
+                    )
             )
             .highPriorityGesture(
                 SimultaneousGesture(
