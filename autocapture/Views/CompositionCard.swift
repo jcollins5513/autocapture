@@ -13,20 +13,29 @@ struct CompositionCard: View {
     let canvasSize: CGSize
     @State private var renderedImage: UIImage?
 
+    private var canvasAspectRatio: CGFloat {
+        guard canvasSize.width > 0, canvasSize.height > 0 else { return 16.0 / 9.0 }
+        return canvasSize.width / canvasSize.height
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let renderedImage {
+                // Fit (don't fill) so the whole composite is visible — filling a
+                // fixed-height box crops most of a wide showroom shot away and
+                // makes the result look zoomed-in.
                 Image(uiImage: renderedImage)
                     .resizable()
-                    .scaledToFill()
-                    .frame(height: 160)
-                    .clipped()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.black.opacity(0.06))
                     .cornerRadius(12)
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.gray.opacity(0.1))
-                        .frame(height: 160)
+                        .aspectRatio(canvasAspectRatio, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
                     ProgressView()
                 }
             }
