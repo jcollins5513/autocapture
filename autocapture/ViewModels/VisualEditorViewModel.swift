@@ -697,6 +697,18 @@ final class VisualEditorViewModel: ObservableObject {
         return count
     }
 
+    func setColorMatchEnabled(_ enabled: Bool, on project: CompositionProject) {
+        project.colorMatchEnabled = enabled
+        project.touch()
+        persist()
+    }
+
+    func setColorMatchStrength(_ strength: Double, on project: CompositionProject) {
+        project.colorMatchStrength = strength
+        project.touch()
+        persist()
+    }
+
     private func persist() {
         guard let context = modelContext else { return }
         do {

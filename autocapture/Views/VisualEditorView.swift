@@ -62,6 +62,7 @@ struct VisualEditorView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     backgroundGeneratorSection
                     canvasSection
+                    colorMatchSection
                     selectedLayerControls
                     layerControlsSection
                 }
@@ -503,12 +504,19 @@ struct VisualEditorView: View {
     }
 
     private func canvasContent(in geometry: GeometryProxy) -> some View {
-        ZStack {
+        // Sample the background's floor tone once so subject previews can be
+        // relit toward it, matching what the exported composite will look like.
+        let backgroundImage = project.background?.imageData.flatMap { UIImage(data: $0) }
+        let backgroundTone: SubjectColorMatch.Tone? = project.colorMatchEnabled
+            ? backgroundImage.flatMap { SubjectColorMatch.backgroundTone(of: $0) }
+            : nil
+
+        return ZStack {
             Color(.secondarySystemBackground)
                 .cornerRadius(24)
 
-            if let data = project.background?.imageData, let image = UIImage(data: data) {
-                Image(uiImage: image)
+            if let backgroundImage {
+                Image(uiImage: backgroundImage)
                     .resizable()
                     .scaledToFill()
                     .frame(width: geometry.size.width, height: geometry.size.height)
@@ -525,7 +533,7 @@ struct VisualEditorView: View {
             ForEach(project.layers.sorted(by: { $0.order < $1.order })) { layer in
                 if layer.isVisible, let image = UIImage(data: layer.imageData) {
                     DraggableLayerView(
-                        image: image,
+                        image: previewImage(for: layer, image: image, backgroundTone: backgroundTone),
                         layer: layer,
                         isSelected: selectedLayer?.id == layer.id,
                         onUpdate: { offset, scale, rotation in
@@ -542,6 +550,70 @@ struct VisualEditorView: View {
             canvasSize = geometry.size
             VisualEditorView.logger.debug("Canvas geometry onAppear. size=\(String(describing: geometry.size), privacy: .public)")
         }
+    }
+
+    @ViewBuilder private var colorMatchSection: some View {
+        if project.background != nil {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("Relight to Background", systemImage: "wand.and.stars")
+                        .font(.headline)
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { project.colorMatchEnabled },
+                        set: { viewModel.setColorMatchEnabled($0, on: project) }
+                    ))
+                    .labelsHidden()
+                }
+
+                Text("Nudges the subject's color and brightness toward the background so it blends into the scene instead of looking pasted on.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if project.colorMatchEnabled {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Strength")
+                            Spacer()
+                            Text("\(Int(project.colorMatchStrength * 100))%")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { project.colorMatchStrength },
+                                set: { project.colorMatchStrength = $0 }
+                            ),
+                            in: 0...2,
+                            onEditingChanged: { editing in
+                                if editing == false {
+                                    viewModel.setColorMatchStrength(project.colorMatchStrength, on: project)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+            .padding()
+            .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+        }
+    }
+
+    /// Subject layers are relit toward the background tone so the canvas preview
+    /// matches the exported composite; other layers pass through unchanged.
+    private func previewImage(
+        for layer: CompositionLayer,
+        image: UIImage,
+        backgroundTone: SubjectColorMatch.Tone?
+    ) -> UIImage {
+        guard layer.type == .subject, let backgroundTone, project.colorMatchEnabled else {
+            return image
+        }
+        return SubjectColorMatch.matched(
+            subject: image,
+            toward: backgroundTone,
+            strength: CGFloat(project.colorMatchStrength)
+        )
     }
 
     private var layerControlsSection: some View {
