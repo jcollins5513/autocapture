@@ -609,11 +609,30 @@ struct VisualEditorView: View {
         guard layer.type == .subject, let backgroundTone, project.colorMatchEnabled else {
             return image
         }
+        // Relight a downsampled copy for the on-canvas preview so scrubbing the
+        // strength slider stays smooth; the exported composite (CompositionRenderer)
+        // relights at full resolution.
         return SubjectColorMatch.matched(
-            subject: image,
+            subject: previewDownsampled(image),
             toward: backgroundTone,
             strength: CGFloat(project.colorMatchStrength)
         )
+    }
+
+    /// A reduced-resolution copy for the live canvas only. The final render is
+    /// unaffected. Preserves transparency so the cut-out stays clean.
+    private func previewDownsampled(_ image: UIImage) -> UIImage {
+        let maxEdge: CGFloat = 1280
+        let longest = max(image.size.width, image.size.height)
+        guard longest > maxEdge else { return image }
+        let scale = maxEdge / longest
+        let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
     }
 
     private var layerControlsSection: some View {

@@ -4,11 +4,21 @@
 //
 //  Relights a lifted subject toward the tone of the background it's being
 //  composited onto, so it reads as part of the scene instead of a cut-out.
-//  Two nudges are applied: a luminance-preserving white-balance correction so
-//  the subject picks up the environment's color cast, and a gentle exposure
-//  match so it isn't obviously brighter or darker than its surroundings. Both
-//  are deliberately subtle and scaled by a caller-supplied strength so the
-//  effect can be tuned (or disabled) without ever fully repainting the subject.
+//  Four coordinated moves are applied, all scaled by a caller-supplied strength:
+//    1. Saturation harmonization — pull the subject's chroma partway toward the
+//       environment's, so a hyper-saturated cut-out stops screaming.
+//    2. Contrast compression — soften the subject's tonal range toward the flat
+//       ambient of a diffuse room, taming glossy speculars and crushed blacks.
+//    3. Luminance-preserving white balance + a gentle exposure match — the
+//       subject inherits the environment's color cast and brightness.
+//    4. An ambient "veil" — lerp the whole subject a few percent toward the
+//       background color, lifting/tinting its blacks and adding the room's haze.
+//  A per-channel average white balance alone is invisible on a saturated hero
+//  color (the dominant channel is clamped and then cancelled by the exposure
+//  lift); the saturation/contrast/veil terms are what actually dissolve the
+//  cut-out look. Everything is tuned so 100% strength is clearly visible yet
+//  photoreal, and all color work happens in straight-alpha space so transparent
+//  and anti-aliased edge pixels are never miscolored.
 //
 
 import CoreGraphics
@@ -28,10 +38,13 @@ enum SubjectColorMatch {
     }
 
     // Base correction amounts, before the caller's global strength multiplier.
-    // Kept low so the subject keeps its own identity — we're nudging it into the
-    // light, not recoloring it to match the floor.
+    // White balance + exposure keep the subject's identity; the saturation,
+    // contrast and veil terms are what actually dissolve the cut-out look.
     private static let baseWhiteBalanceStrength: CGFloat = 0.35
     private static let baseExposureStrength: CGFloat = 0.22
+    private static let basePull: CGFloat = 0.50          // fraction of the chroma gap to close
+    private static let baseContrastDrop: CGFloat = 0.15  // how far to flatten toward ambient
+    private static let baseVeil: CGFloat = 0.06          // ambient haze / shadow-lift amount
 
     // The background is sampled over its lower-center floor — the surface the
     // subject actually sits on and takes its bounce light from — rather than the
@@ -53,9 +66,9 @@ enum SubjectColorMatch {
         guard let source = averageTone(of: subject, in: nil), source.luminance > 0.004,
               target.luminance > 0.004 else { return subject }
 
-        // Luminance-preserving white balance: match the subject's per-channel
-        // chroma ratios to the target's, so it inherits the environment's cast
-        // without changing its own brightness.
+        // --- White balance + exposure (luminance-preserving nudge) ---
+        // Match the subject's per-channel chroma ratios to the target's without
+        // changing its own brightness, then a mild exposure match on top.
         func whiteBalanceGain(_ subjectChannel: CGFloat, _ targetChannel: CGFloat) -> CGFloat {
             let subjectRatio = subjectChannel / source.luminance
             guard subjectRatio > 0.004 else { return 1 }
@@ -76,12 +89,37 @@ enum SubjectColorMatch {
         let gainG = clamp(blend(wbG, wbStrength) * blend(exposure, exposureStrength), min: 0.5, max: 1.9)
         let gainB = clamp(blend(wbB, wbStrength) * blend(exposure, exposureStrength), min: 0.5, max: 1.9)
 
+        // --- Saturation harmonization ---
+        // Close part of the chroma gap between subject and background. satFactor
+        // scales chroma ~linearly (CIColorControls lerps toward luma-gray), so
+        // the target/current ratio is the right multiplier. Floored at 0.55 so a
+        // red car stays clearly red; ceilinged at 1.10 for the rare flat subject.
+        let sSubj = saturation(of: source)
+        let sBg = saturation(of: target)
+        let pull = basePull * strength
+        let sTarget = sSubj - pull * (sSubj - sBg)
+        let satFactor = sSubj > 0.01 ? clamp(sTarget / sSubj, min: 0.55, max: 1.10) : 1
+
+        // --- Contrast compression toward the flat ambient ---
+        let contrastFactor = clamp(1 - baseContrastDrop * strength, min: 0.55, max: 1.0)
+
+        // --- Ambient veil (shadow lift + haze), tinted by the background tone ---
+        let veil = clamp(baseVeil * strength, min: 0, max: 0.18)
+
         // Nothing meaningful to do — avoid an expensive round-trip.
-        if abs(gainR - 1) < 0.01, abs(gainG - 1) < 0.01, abs(gainB - 1) < 0.01 {
+        if abs(satFactor - 1) < 0.01, abs(contrastFactor - 1) < 0.01, veil < 0.005,
+           abs(gainR - 1) < 0.01, abs(gainG - 1) < 0.01, abs(gainB - 1) < 0.01 {
             return subject
         }
 
-        return applyChannelGains(to: subject, r: gainR, g: gainG, b: gainB) ?? subject
+        return applyRelight(
+            to: subject,
+            satFactor: satFactor,
+            contrast: contrastFactor,
+            gainR: gainR, gainG: gainG, gainB: gainB,
+            veil: veil,
+            ambient: target
+        ) ?? subject
     }
 
     // MARK: - Sampling
@@ -143,21 +181,56 @@ enum SubjectColorMatch {
 
     // MARK: - Applying
 
-    private static func applyChannelGains(to image: UIImage, r: CGFloat, g: CGFloat, b: CGFloat) -> UIImage? {
+    /// Ordered chain: reshape the subject's own tonal frame (saturation +
+    /// contrast) first, align it to the environment (per-channel gains), then let
+    /// the atmosphere (veil) sit last — all in straight-alpha space so edges and
+    /// transparent pixels keep correct color and coverage.
+    private static func applyRelight(
+        to image: UIImage,
+        satFactor: CGFloat,
+        contrast: CGFloat,
+        gainR: CGFloat, gainG: CGFloat, gainB: CGFloat,
+        veil: CGFloat,
+        ambient: Tone
+    ) -> UIImage? {
         guard let ciImage = CIImage(image: image) else { return nil }
-        let filter = CIFilter.colorMatrix()
-        filter.inputImage = ciImage
-        filter.rVector = CIVector(x: r, y: 0, z: 0, w: 0)
-        filter.gVector = CIVector(x: 0, y: g, z: 0, w: 0)
-        filter.bVector = CIVector(x: 0, y: 0, z: b, w: 0)
-        filter.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
-        filter.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
-        guard let output = filter.outputImage,
-              let cgImage = ciContext.createCGImage(output, from: output.extent) else { return nil }
+
+        // Straight-alpha: the contrast pivot (0.5) and the veil bias are additive
+        // terms that would miscolor premultiplied transparent/edge pixels.
+        let straight = ciImage.unpremultiplyingAlpha()
+
+        let tone = CIFilter.colorControls()
+        tone.inputImage = straight
+        tone.saturation = Float(satFactor)
+        tone.contrast = Float(contrast)
+        tone.brightness = 0
+        guard let toned = tone.outputImage else { return nil }
+
+        // out = (in · gain) · (1 - veil) + veil · ambient
+        let k = 1 - veil
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = toned
+        matrix.rVector = CIVector(x: gainR * k, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: gainG * k, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: gainB * k, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        matrix.biasVector = CIVector(x: veil * ambient.r, y: veil * ambient.g, z: veil * ambient.b, w: 0)
+        guard let matched = matrix.outputImage else { return nil }
+
+        let output = matched.premultiplyingAlpha()
+        guard let cgImage = ciContext.createCGImage(output, from: output.extent) else { return nil }
         return UIImage(cgImage: cgImage, scale: image.scale, orientation: .up)
     }
 
     // MARK: - Helpers
+
+    /// HSV saturation of a tone: 0 for neutral gray, →1 for a pure hue. Symmetric
+    /// for subject and background, so no extra sampling is needed.
+    private static func saturation(of tone: Tone) -> CGFloat {
+        let mx = max(tone.r, max(tone.g, tone.b))
+        let mn = min(tone.r, min(tone.g, tone.b))
+        return mx > 0.004 ? (mx - mn) / mx : 0
+    }
 
     private static func clamp(_ value: CGFloat, min lo: CGFloat, max hi: CGFloat) -> CGFloat {
         Swift.min(hi, Swift.max(lo, value))
