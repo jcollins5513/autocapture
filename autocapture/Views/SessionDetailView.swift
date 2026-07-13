@@ -296,8 +296,8 @@ struct SessionDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
           ForEach(viewModel.uploadResults) { result in
             HStack {
-              Image(systemName: result.status == .success ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                .foregroundStyle(result.status == .success ? .green : .red)
+              Image(systemName: uploadStatusIcon(result.status))
+                .foregroundStyle(uploadStatusColor(result.status))
               VStack(alignment: .leading, spacing: 2) {
                 Text(result.filename)
                   .font(.subheadline)
@@ -610,6 +610,22 @@ struct SessionDetailView: View {
       return canvasSizeForAspectRatio(firstBackground.aspectRatio)
     }
     return CGSize(width: 3584, height: 2016)  // Default 16:9
+  }
+
+  private func uploadStatusIcon(_ status: SessionDetailViewModel.UploadOutcome.Status) -> String {
+    switch status {
+    case .success: return "checkmark.circle.fill"
+    case .queued: return "clock.fill"
+    case .failed: return "xmark.octagon.fill"
+    }
+  }
+
+  private func uploadStatusColor(_ status: SessionDetailViewModel.UploadOutcome.Status) -> Color {
+    switch status {
+    case .success: return .green
+    case .queued: return .orange
+    case .failed: return .red
+    }
   }
 
   private func canvasSizeForAspectRatio(_ aspectRatio: String) -> CGSize {

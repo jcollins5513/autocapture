@@ -37,6 +37,7 @@ final class SessionDetailViewModel: ObservableObject {
     struct UploadOutcome: Identifiable {
         enum Status {
             case success
+            case queued
             case failed
         }
 
@@ -321,11 +322,17 @@ final class SessionDetailViewModel: ObservableObject {
                     filename: filename
                 )
 
+                // The server returns `pending` for originals it still has to
+                // process — that's queued, not done. Only report success once a
+                // processed image actually exists.
+                let isProcessed = upload.status == "processed" || upload.processedUrl != nil
                 uploadResults.insert(
                     UploadOutcome(
                         filename: filename,
-                        status: .success,
-                        message: "Uploaded to web companion queue",
+                        status: isProcessed ? .success : .queued,
+                        message: isProcessed
+                            ? "Uploaded and processed"
+                            : "Uploaded — queued for background removal",
                         processedUrl: upload.processedUrl
                     ),
                     at: 0

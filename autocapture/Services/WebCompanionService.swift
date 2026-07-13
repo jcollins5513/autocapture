@@ -94,11 +94,23 @@ enum WebCompanionService {
     }
 
     if !(200...299).contains(httpResponse.statusCode) {
-      let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown server error"
+      let errorMsg = serverErrorMessage(from: data) ?? "Server error (\(httpResponse.statusCode))"
       logger.error("Upload failed: \(httpResponse.statusCode) - \(errorMsg)")
       throw UploadError.uploadFailed(errorMsg)
     }
 
     logger.info("Successfully uploaded image for stock \(stockNumber)")
+  }
+
+  private struct ServerErrorBody: Decodable { let error: String? }
+
+  /// Pulls the message out of a `{ "error": "..." }` body so callers surface a
+  /// clean message instead of the raw JSON.
+  private static func serverErrorMessage(from data: Data) -> String? {
+    if let parsed = try? JSONDecoder().decode(ServerErrorBody.self, from: data),
+       let error = parsed.error, error.isEmpty == false {
+      return error
+    }
+    return nil
   }
 }
