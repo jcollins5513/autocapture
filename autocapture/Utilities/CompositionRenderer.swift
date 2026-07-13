@@ -22,14 +22,22 @@ enum CompositionRenderer {
             .sorted { $0.order < $1.order }
         logger.debug("Rendering composition. canvasSize=\(String(describing: canvasSize), privacy: .public) visibleLayerCount=\(layers.count, privacy: .public) hasBackground=\(project.background != nil, privacy: .public)")
 
+        let backgroundImage = project.background?.imageData.flatMap { UIImage(data: $0) }
+
+        // Relight subjects toward the background's floor tone so they don't look
+        // pasted on. Skipped entirely when the user has disabled it or there's
+        // no background to sample.
+        let matchStrength = project.colorMatchEnabled ? CGFloat(project.colorMatchStrength) : 0
+        let backgroundTone: SubjectColorMatch.Tone? = (matchStrength > 0)
+            ? backgroundImage.flatMap { SubjectColorMatch.backgroundTone(of: $0) }
+            : nil
+
         let image = renderer.image { context in
             let rect = CGRect(origin: .zero, size: canvasSize)
             context.cgContext.setFillColor(UIColor.systemBackground.cgColor)
             context.cgContext.fill(rect)
 
-            if let background = project.background,
-               let data = background.imageData,
-               let backgroundImage = UIImage(data: data) {
+            if let backgroundImage {
                 drawBackground(backgroundImage, in: context.cgContext, canvasSize: canvasSize)
             }
 
@@ -39,7 +47,9 @@ enum CompositionRenderer {
                     image: image,
                     layer: layer,
                     context: context.cgContext,
-                    canvasSize: canvasSize
+                    canvasSize: canvasSize,
+                    backgroundTone: backgroundTone,
+                    matchStrength: matchStrength
                 )
             }
         }
@@ -71,7 +81,9 @@ enum CompositionRenderer {
         image: UIImage,
         layer: CompositionLayer,
         context: CGContext,
-        canvasSize: CGSize
+        canvasSize: CGSize,
+        backgroundTone: SubjectColorMatch.Tone? = nil,
+        matchStrength: CGFloat = 0
     ) {
         let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
         let offset = CGPoint(x: center.x + CGFloat(layer.offsetX), y: center.y + CGFloat(layer.offsetY))
@@ -93,17 +105,29 @@ enum CompositionRenderer {
         )
         logger.debug("Drawing layer. name=\(layer.name, privacy: .public) order=\(layer.order, privacy: .public) imageSize=\(imageSize.debugDescription, privacy: .public) offset=(\(offset.x, privacy: .public), \(offset.y, privacy: .public)) rotationDegrees=\(layer.rotation, privacy: .public) scale=\(layer.scale, privacy: .public) opacity=\(layer.opacity, privacy: .public)")
 
-        // Ground the subject with a soft contact shadow so it doesn't look like
-        // it's floating on the background. Drawn before the subject so the
-        // subject sits on top of it, and anchored to the subject's actual
-        // (non-transparent) footprint rather than the transparent image frame.
+        // Relight the subject toward the background before drawing so the
+        // grounding effects (reflection/shadow) and the subject itself all share
+        // the corrected tone. Non-subject layers are drawn as-is.
+        var drawImage = image
         if layer.type == .subject {
-            let contentBounds = SubjectGeometry.opaqueBounds(of: image)
+            if let backgroundTone, matchStrength > 0 {
+                drawImage = SubjectColorMatch.matched(
+                    subject: image,
+                    toward: backgroundTone,
+                    strength: matchStrength
+                )
+            }
+
+            // Ground the subject with a soft contact shadow so it doesn't look
+            // like it's floating on the background. Drawn before the subject so
+            // the subject sits on top of it, and anchored to the subject's actual
+            // (non-transparent) footprint rather than the transparent image frame.
+            let contentBounds = SubjectGeometry.opaqueBounds(of: drawImage)
                 ?? CGRect(origin: .zero, size: imageSize)
             // Faint mirrored reflection first, then the contact shadow on top of
             // it near the tires, then the subject over both.
             drawReflection(
-                image: image,
+                image: drawImage,
                 contentBounds: contentBounds,
                 imageSize: imageSize,
                 context: context,
@@ -117,7 +141,7 @@ enum CompositionRenderer {
             )
         }
 
-        image.draw(in: drawRect)
+        drawImage.draw(in: drawRect)
         context.restoreGState()
     }
 
