@@ -13,13 +13,18 @@ class CameraService: NSObject, ObservableObject {
     let session = AVCaptureSession()
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let photoOutput = AVCapturePhotoOutput()
+    private let movieOutput = AVCaptureMovieFileOutput()
+    private var audioDeviceInput: AVCaptureDeviceInput?
     private var currentDevice: AVCaptureDevice?
 
     @Published var isSessionRunning = false
     @Published var flashMode: AVCaptureDevice.FlashMode = .auto
     @Published var currentZoomFactor: CGFloat = 1.0
+    @Published var isRecording = false
+    @Published var captureMode: CaptureMediaMode = .photo
 
     private var photoContinuation: CheckedContinuation<UIImage, Error>?
+    private var movieContinuation: CheckedContinuation<URL, Error>?
 
     var previewLayer: AVCaptureVideoPreviewLayer {
         let layer = AVCaptureVideoPreviewLayer(session: session)
@@ -73,7 +78,103 @@ class CameraService: NSObject, ObservableObject {
         photoOutput.isHighResolutionCaptureEnabled = true
         photoOutput.maxPhotoQualityPrioritization = .quality
 
+        // Movie output lives alongside the photo output so switching between
+        // stills and video never has to tear the session down.
+        if session.canAddOutput(movieOutput) {
+            session.addOutput(movieOutput)
+        }
+
         session.commitConfiguration()
+
+        addAudioInputIfAuthorized()
+    }
+
+    /// Microphone access is optional: video still records (silently) if the
+    /// user declines, so this never blocks the camera from starting.
+    private func addAudioInputIfAuthorized() {
+        guard audioDeviceInput == nil else { return }
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+        guard let audioDevice = AVCaptureDevice.default(for: .audio),
+              let audioInput = try? AVCaptureDeviceInput(device: audioDevice) else { return }
+
+        session.beginConfiguration()
+        if session.canAddInput(audioInput) {
+            session.addInput(audioInput)
+            audioDeviceInput = audioInput
+        }
+        session.commitConfiguration()
+    }
+
+    @discardableResult
+    func requestMicrophoneAccess() async -> Bool {
+        let granted: Bool
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            granted = true
+        case .notDetermined:
+            granted = await AVCaptureDevice.requestAccess(for: .audio)
+        default:
+            granted = false
+        }
+
+        if granted {
+            addAudioInputIfAuthorized()
+        }
+        return granted
+    }
+
+    // MARK: - Video recording
+
+    /// Stills want the `.photo` preset for maximum resolution while movies need
+    /// a video preset, so the mode switch reconfigures the running session.
+    func setCaptureMode(_ mode: CaptureMediaMode) {
+        guard captureMode != mode else { return }
+        guard movieOutput.isRecording == false else { return }
+
+        let preset: AVCaptureSession.Preset = mode == .photo ? .photo : .high
+        session.beginConfiguration()
+        if session.canSetSessionPreset(preset) {
+            session.sessionPreset = preset
+        }
+        session.commitConfiguration()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.captureMode = mode
+        }
+    }
+
+    func startRecording() throws {
+        guard movieOutput.isRecording == false else { return }
+        guard session.outputs.contains(movieOutput) else {
+            throw CameraError.videoCaptureFailed
+        }
+
+        if let connection = movieOutput.connection(with: .video) {
+            if connection.isVideoStabilizationSupported {
+                connection.preferredVideoStabilizationMode = .auto
+            }
+            if connection.isVideoMirroringSupported {
+                connection.isVideoMirrored = videoDeviceInput?.device.position == .front
+            }
+        }
+
+        let url = VideoFileStore.makeTemporaryURL()
+        movieOutput.startRecording(to: url, recordingDelegate: self)
+        DispatchQueue.main.async { [weak self] in
+            self?.isRecording = true
+        }
+    }
+
+    /// Stops the current recording and resolves with the raw movie on disk.
+    func stopRecording() async throws -> URL {
+        guard movieOutput.isRecording else {
+            throw CameraError.videoCaptureFailed
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            movieContinuation = continuation
+            movieOutput.stopRecording()
+        }
     }
 
     func startSession() {
@@ -135,6 +236,7 @@ class CameraService: NSObject, ObservableObject {
     }
 
     func flipCamera() throws {
+        guard movieOutput.isRecording == false else { return }
         guard let currentInput = videoDeviceInput else { return }
 
         session.beginConfiguration()
@@ -195,6 +297,31 @@ class CameraService: NSObject, ObservableObject {
         } catch {
             print("Failed to focus: \(error)")
         }
+    }
+}
+
+// MARK: - AVCaptureFileOutputRecordingDelegate
+extension CameraService: AVCaptureFileOutputRecordingDelegate {
+    func fileOutput(
+        _ output: AVCaptureFileOutput,
+        didFinishRecordingTo outputFileURL: URL,
+        from connections: [AVCaptureConnection],
+        error: Error?
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            self?.isRecording = false
+        }
+
+        let continuation = movieContinuation
+        movieContinuation = nil
+
+        if let error {
+            try? FileManager.default.removeItem(at: outputFileURL)
+            continuation?.resume(throwing: error)
+            return
+        }
+
+        continuation?.resume(returning: outputFileURL)
     }
 }
 

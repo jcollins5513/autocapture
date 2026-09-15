@@ -14,8 +14,23 @@ import SwiftUI
 class CameraViewModel: ObservableObject {
     let cameraService = CameraService()
     private let backgroundRemovalService = BackgroundRemovalService()
+    private let videoLiftService = VideoSubjectLiftService()
 
     @Published var isProcessing = false
+    /// 0...1 while a recorded clip is being lifted frame by frame.
+    @Published var processingProgress: Double = 0
+    @Published var processingMessage = "Processing..."
+    @Published var isRecording = false
+    @Published var recordingDuration: TimeInterval = 0
+    @Published var captureMediaMode: CaptureMediaMode = .photo {
+        didSet {
+            guard captureMediaMode != oldValue else { return }
+            cameraService.setCaptureMode(captureMediaMode)
+            if captureMediaMode == .video {
+                Task { _ = await cameraService.requestMicrophoneAccess() }
+            }
+        }
+    }
     @Published var errorMessage: String?
     @Published var showError = false
     @Published var flashMode: AVCaptureDevice.FlashMode = .auto
@@ -25,6 +40,7 @@ class CameraViewModel: ObservableObject {
     @Published var subjectMode: CaptureSubjectMode = .singleSubject
 
     private var modelContext: ModelContext?
+    private var recordingTimer: Timer?
 
     init() {
         setupBindings()
@@ -57,6 +73,152 @@ class CameraViewModel: ObservableObject {
         // Bind zoom factor
         cameraService.$currentZoomFactor
             .assign(to: &$currentZoomFactor)
+
+        cameraService.$isRecording
+            .assign(to: &$isRecording)
+    }
+
+    // MARK: - Video
+
+    func toggleRecording() async {
+        if cameraService.isRecording {
+            await finishRecording()
+        } else {
+            startRecording()
+        }
+    }
+
+    private func startRecording() {
+        guard isProcessing == false else { return }
+
+        do {
+            try cameraService.startRecording()
+            recordingDuration = 0
+            let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.cameraService.isRecording else { return }
+                    self.recordingDuration += 0.1
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            recordingTimer = timer
+        } catch {
+            handleError(error)
+        }
+    }
+
+    private func finishRecording() async {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+
+        do {
+            let recordedURL = try await cameraService.stopRecording()
+            recordingDuration = 0
+            await processRecording(at: recordedURL)
+        } catch {
+            handleError(CameraError.videoCaptureFailed)
+        }
+    }
+
+    /// Runs the lift (when the mode asks for it) and stores the clip.
+    func processRecording(at recordedURL: URL) async {
+        isProcessing = true
+        processingProgress = 0
+        processingMessage = subjectMode == .fullScene ? "Saving video..." : "Lifting subject from video..."
+        defer {
+            isProcessing = false
+            processingProgress = 0
+            processingMessage = "Processing..."
+        }
+
+        do {
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+
+            if subjectMode == .fullScene {
+                let filename = try VideoFileStore.importFile(at: recordedURL)
+                try? FileManager.default.removeItem(at: recordedURL)
+                await saveProcessedVideo(
+                    processedFilename: filename,
+                    originalFilename: nil,
+                    isSubjectLifted: false,
+                    captureMode: .fullScene,
+                    hasAlphaChannel: false
+                )
+                return
+            }
+
+            let options = VideoSubjectLiftService.Options(
+                allowMultipleSubjects: subjectMode == .multiSubject,
+                background: .transparent
+            )
+
+            let result = try await videoLiftService.liftSubject(from: recordedURL, options: options) { [weak self] value in
+                Task { @MainActor [weak self] in
+                    self?.processingProgress = value
+                }
+            }
+
+            let originalFilename = try? VideoFileStore.importFile(at: recordedURL)
+            try? FileManager.default.removeItem(at: recordedURL)
+
+            let processedFilename = try VideoFileStore.adopt(fileAt: result.outputURL)
+            await saveProcessedVideo(
+                processedFilename: processedFilename,
+                originalFilename: originalFilename,
+                isSubjectLifted: true,
+                captureMode: subjectMode,
+                hasAlphaChannel: result.hasAlphaChannel,
+                duration: result.duration
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: recordedURL)
+            handleError(error)
+        }
+    }
+
+    private func saveProcessedVideo(
+        processedFilename: String,
+        originalFilename: String?,
+        isSubjectLifted: Bool,
+        captureMode: CaptureSubjectMode,
+        hasAlphaChannel: Bool,
+        duration: Double? = nil
+    ) async {
+        guard let context = modelContext else { return }
+
+        let url = VideoFileStore.url(forFilename: processedFilename)
+        let thumbnailSource = originalFilename.map(VideoFileStore.url(forFilename:)) ?? url
+        // Lifted clips are transparent, so the poster frame comes from the
+        // original recording whenever we still have it.
+        let thumbnail = await VideoFileStore.thumbnail(for: thumbnailSource)
+        let resolvedDuration = duration ?? (await VideoFileStore.duration(for: url))
+
+        let video = ProcessedVideo(
+            processedFilename: processedFilename,
+            originalFilename: originalFilename,
+            subjectDescription: subjectDescription,
+            backgroundCategory: activeSession?.primaryCategory,
+            session: activeSession,
+            isSubjectLifted: isSubjectLifted,
+            captureMode: captureMode,
+            hasAlphaChannel: hasAlphaChannel,
+            durationSeconds: resolvedDuration,
+            thumbnail: thumbnail
+        )
+
+        if let session = activeSession {
+            session.videos.append(video)
+            session.touch()
+        }
+
+        context.insert(video)
+
+        do {
+            try context.save()
+        } catch {
+            print("Failed to save video: \(error)")
+        }
     }
 
     func setupCamera() async {
@@ -151,6 +313,11 @@ class CameraViewModel: ObservableObject {
     }
 
     func stopCamera() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        if cameraService.isRecording {
+            Task { _ = try? await cameraService.stopRecording() }
+        }
         cameraService.stopSession()
     }
 

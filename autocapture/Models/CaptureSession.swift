@@ -44,6 +44,8 @@ final class CaptureSession {
     @Relationship(deleteRule: .cascade)
     var images: [ProcessedImage]
     @Relationship(deleteRule: .cascade)
+    var videos: [ProcessedVideo]
+    @Relationship(deleteRule: .cascade)
     var compositions: [CompositionProject]
     // Generated backgrounds are kept even if their session goes away so the
     // user's library of generations (including the reusable default) survives.
@@ -60,6 +62,7 @@ final class CaptureSession {
         self.statusRawValue = Status.planning.rawValue
         self.categories = categories.map(\.rawValue)
         self.images = []
+        self.videos = []
         self.compositions = []
         self.generatedBackgrounds = []
     }

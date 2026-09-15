@@ -11,6 +11,13 @@ AutoCapture is a professional iOS photography application that uses advanced com
 - **Batch Processing**: Stock number-based batch capture and organization
 - **High-Quality Output**: 4K resolution support with <2 second processing
 
+### 🎬 Video Subject Lift
+- **Video Capture**: Record clips straight from the camera with a Photo/Video mode switch
+- **Per-Frame Subject Lifting**: The same Vision foreground mask used for stills, applied to every frame
+- **Transparent Output**: HEVC with alpha (falls back to a flat backdrop where alpha is unsupported)
+- **Photos Import**: Pull an existing clip into a session and lift its subject
+- **Audio Preserved**: The original soundtrack is passed through untouched
+
 ### 🎨 Visual Editor
 - **Multi-Layer Compositing**: Unlimited layers with drag-and-drop editing
 - **File Import Support**: JPEG, JPG, PNG, HEIF, SVG formats

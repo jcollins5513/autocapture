@@ -5,6 +5,7 @@
 //  Created by OpenAI Assistant on 10/15/25.
 //
 
+import PhotosUI
 import SwiftData
 import SwiftUI
 import UIKit
@@ -24,6 +25,7 @@ struct SessionDetailView: View {
   @State private var captureSelection: Set<UUID> = []
   @State private var selectedStatus: CaptureSession.Status
   @State private var showPostGeneration = false
+  @State private var videoPickerItem: PhotosPickerItem?
 
   private let gridColumns = [
     GridItem(.flexible(), spacing: 12),
@@ -48,6 +50,7 @@ struct SessionDetailView: View {
         headerSection
         batchOperationsSection
         capturedImagesSection
+        capturedVideosSection
         generatedBackgroundSection
         compositionsSection
         uploadSection
@@ -163,6 +166,69 @@ struct SessionDetailView: View {
     }
     .sheet(isPresented: $showPostGeneration) {
       PostGenerationView(session: session)
+    }
+    .onChange(of: videoPickerItem) { _, newValue in
+      guard let newValue else { return }
+      videoPickerItem = nil
+      Task {
+        guard let movie = try? await newValue.loadTransferable(type: MovieTransferable.self) else {
+          return
+        }
+        await viewModel.importVideo(from: movie.url, session: session, context: modelContext)
+      }
+    }
+  }
+
+  private var capturedVideosSection: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Text("Captured Video")
+          .font(.title3)
+          .fontWeight(.semibold)
+        Spacer()
+        PhotosPicker(selection: $videoPickerItem, matching: .videos) {
+          Label("Import", systemImage: "square.and.arrow.down")
+        }
+        .disabled(viewModel.isProcessingVideo)
+      }
+
+      Picker("Video lift mode", selection: $viewModel.videoSubjectMode) {
+        ForEach(CaptureSubjectMode.allCases) { mode in
+          Text(mode.displayName).tag(mode)
+        }
+      }
+      .pickerStyle(.segmented)
+
+      if viewModel.isProcessingVideo {
+        VStack(alignment: .leading, spacing: 6) {
+          ProgressView(value: viewModel.videoProcessingProgress)
+          Text("\(viewModel.videoProcessingMessage) \(Int(viewModel.videoProcessingProgress * 100))%")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      if session.videos.isEmpty {
+        ContentUnavailableView(
+          "No Video",
+          systemImage: "video.badge.plus",
+          description: Text("Record in the camera's Video mode or import a clip to lift its subject.")
+        )
+        .frame(maxWidth: .infinity)
+      } else {
+        LazyVGrid(columns: gridColumns, spacing: 12) {
+          ForEach(session.videos.sorted(by: { $0.captureDate > $1.captureDate })) { video in
+            CapturedVideoCard(video: video)
+              .contextMenu {
+                Button(role: .destructive) {
+                  viewModel.deleteVideo(video, context: modelContext)
+                } label: {
+                  Label("Delete", systemImage: "trash")
+                }
+              }
+          }
+        }
+      }
     }
   }
 

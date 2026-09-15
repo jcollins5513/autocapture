@@ -24,6 +24,10 @@ final class SessionDetailViewModel: ObservableObject {
     @Published var showError = false
     @Published var showExportSheet = false
     @Published var exportImages: [UIImage] = []
+    @Published var isProcessingVideo = false
+    @Published var videoProcessingProgress: Double = 0
+    @Published var videoProcessingMessage = "Processing video..."
+    @Published var videoSubjectMode: CaptureSubjectMode = .multiSubject
 
     @Published var selectedCategory: BackgroundCategory = .automotive
     @Published var subjectDescription: String = ""
@@ -32,6 +36,7 @@ final class SessionDetailViewModel: ObservableObject {
 
     private let backgroundGenerationService: BackgroundGenerationService
     private let uploadService: WebCompanionUploadService
+    private let videoLiftService = VideoSubjectLiftService()
     private let logger = Logger(subsystem: "com.autocapture", category: "SessionDetailViewModel")
 
     struct UploadOutcome: Identifiable {
@@ -57,6 +62,112 @@ final class SessionDetailViewModel: ObservableObject {
         self.uploadService = uploadService
         if let session, let primaryCategory = session.primaryCategory {
             self.selectedCategory = primaryCategory
+        }
+    }
+
+    // MARK: - Video
+
+    /// Lifts the subject from an imported clip and attaches it to the session.
+    /// `sourceURL` is consumed (deleted) once processing finishes.
+    func importVideo(from sourceURL: URL, session: CaptureSession, context: ModelContext) async {
+        isProcessingVideo = true
+        videoProcessingProgress = 0
+        videoProcessingMessage = videoSubjectMode == .fullScene
+            ? "Importing video..."
+            : "Lifting subject from video..."
+        defer {
+            isProcessingVideo = false
+            videoProcessingProgress = 0
+        }
+
+        do {
+            if videoSubjectMode == .fullScene {
+                let filename = try VideoFileStore.importFile(at: sourceURL)
+                try? FileManager.default.removeItem(at: sourceURL)
+                await attachVideo(
+                    processedFilename: filename,
+                    originalFilename: nil,
+                    isSubjectLifted: false,
+                    hasAlphaChannel: false,
+                    duration: nil,
+                    session: session,
+                    context: context
+                )
+                return
+            }
+
+            let options = VideoSubjectLiftService.Options(
+                allowMultipleSubjects: videoSubjectMode == .multiSubject,
+                background: .transparent
+            )
+            let result = try await videoLiftService.liftSubject(from: sourceURL, options: options) { [weak self] value in
+                Task { @MainActor [weak self] in
+                    self?.videoProcessingProgress = value
+                }
+            }
+
+            let originalFilename = try? VideoFileStore.importFile(at: sourceURL)
+            try? FileManager.default.removeItem(at: sourceURL)
+            let processedFilename = try VideoFileStore.adopt(fileAt: result.outputURL)
+
+            await attachVideo(
+                processedFilename: processedFilename,
+                originalFilename: originalFilename,
+                isSubjectLifted: true,
+                hasAlphaChannel: result.hasAlphaChannel,
+                duration: result.duration,
+                session: session,
+                context: context
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: sourceURL)
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+
+    func deleteVideo(_ video: ProcessedVideo, context: ModelContext) {
+        video.deleteMediaFiles()
+        context.delete(video)
+        try? context.save()
+    }
+
+    private func attachVideo(
+        processedFilename: String,
+        originalFilename: String?,
+        isSubjectLifted: Bool,
+        hasAlphaChannel: Bool,
+        duration: Double?,
+        session: CaptureSession,
+        context: ModelContext
+    ) async {
+        let processedURL = VideoFileStore.url(forFilename: processedFilename)
+        let thumbnailSource = originalFilename.map(VideoFileStore.url(forFilename:)) ?? processedURL
+        let thumbnail = await VideoFileStore.thumbnail(for: thumbnailSource)
+        let resolvedDuration = duration ?? (await VideoFileStore.duration(for: processedURL))
+
+        let video = ProcessedVideo(
+            processedFilename: processedFilename,
+            originalFilename: originalFilename,
+            subjectDescription: subjectDescription,
+            backgroundCategory: session.primaryCategory,
+            session: session,
+            isSubjectLifted: isSubjectLifted,
+            captureMode: videoSubjectMode,
+            hasAlphaChannel: hasAlphaChannel,
+            durationSeconds: resolvedDuration,
+            thumbnail: thumbnail
+        )
+
+        session.videos.append(video)
+        session.touch()
+        context.insert(video)
+
+        do {
+            try context.save()
+        } catch {
+            errorMessage = error.localizedDescription
+            showError = true
         }
     }
 

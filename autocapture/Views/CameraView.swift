@@ -20,6 +20,9 @@ struct CameraView: View {
     private let session: CaptureSession?
     @State private var subjectDescription: String = ""
     @State private var selectedSubjectMode: CaptureSubjectMode = .singleSubject
+    @AppStorage("capture.mediaMode")
+    private var storedMediaModeRawValue = CaptureMediaMode.photo.rawValue
+    @State private var selectedMediaMode: CaptureMediaMode = .photo
 
     init(session: CaptureSession? = nil) {
         self._viewModel = StateObject(wrappedValue: CameraViewModel())
@@ -36,12 +39,16 @@ struct CameraView: View {
             GalleryView()
         }
         .alert("Error", isPresented: $viewModel.showError) {
-            Button("Retake", role: .cancel) {
-                Task {
-                    await viewModel.capturePhoto()
+            if selectedMediaMode == .photo {
+                Button("Retake", role: .cancel) {
+                    Task {
+                        await viewModel.capturePhoto()
+                    }
                 }
+                Button("Cancel", role: .destructive) {}
+            } else {
+                Button("OK", role: .cancel) {}
             }
-            Button("Cancel", role: .destructive) {}
         } message: {
             Text(viewModel.errorMessage ?? "An error occurred")
         }
@@ -51,6 +58,9 @@ struct CameraView: View {
             let initialMode = CaptureSubjectMode(rawValue: storedSubjectModeRawValue) ?? .singleSubject
             selectedSubjectMode = initialMode
             viewModel.subjectMode = initialMode
+            let initialMediaMode = CaptureMediaMode(rawValue: storedMediaModeRawValue) ?? .photo
+            selectedMediaMode = initialMediaMode
+            viewModel.captureMediaMode = initialMediaMode
             await viewModel.setupCamera()
             subjectDescription = viewModel.subjectDescription
         }
@@ -63,6 +73,10 @@ struct CameraView: View {
         .onChange(of: selectedSubjectMode) { _, newValue in
             storedSubjectModeRawValue = newValue.rawValue
             viewModel.subjectMode = newValue
+        }
+        .onChange(of: selectedMediaMode) { _, newValue in
+            storedMediaModeRawValue = newValue.rawValue
+            viewModel.captureMediaMode = newValue
         }
     }
 
@@ -132,12 +146,50 @@ struct CameraView: View {
     }
 
     private var bottomControls: some View {
-        HStack(spacing: 60) {
-            flashButton
-            captureButton
-            flipCameraButton
+        VStack(spacing: 20) {
+            if viewModel.isRecording {
+                recordingIndicator
+            } else {
+                mediaModePicker
+            }
+
+            HStack(spacing: 60) {
+                flashButton
+                captureButton
+                flipCameraButton
+            }
         }
         .padding(.bottom, 40)
+    }
+
+    private var mediaModePicker: some View {
+        Picker("Capture Mode", selection: $selectedMediaMode) {
+            ForEach(CaptureMediaMode.allCases) { mode in
+                Label(mode.displayName, systemImage: mode.iconName).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 240)
+        .disabled(viewModel.isProcessing)
+    }
+
+    private var recordingIndicator: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(.red)
+                .frame(width: 10, height: 10)
+            Text(formattedRecordingDuration)
+                .font(.callout.monospacedDigit())
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Capsule().fill(.black.opacity(0.45)))
+    }
+
+    private var formattedRecordingDuration: String {
+        let total = Int(viewModel.recordingDuration)
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     @ViewBuilder private var processingOverlay: some View {
@@ -147,11 +199,18 @@ struct CameraView: View {
                     .ignoresSafeArea()
 
                 VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                        .tint(.white)
+                    if viewModel.processingProgress > 0 {
+                        ProgressView(value: viewModel.processingProgress)
+                            .progressViewStyle(.linear)
+                            .tint(.white)
+                            .frame(width: 220)
+                    } else {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                            .tint(.white)
+                    }
 
-                    Text("Processing...")
+                    Text(viewModel.processingMessage)
                         .foregroundColor(.white)
                         .font(.headline)
                 }
@@ -226,7 +285,12 @@ struct CameraView: View {
         Button(
             action: {
                 Task {
-                    await viewModel.capturePhoto()
+                    switch selectedMediaMode {
+                    case .photo:
+                        await viewModel.capturePhoto()
+                    case .video:
+                        await viewModel.toggleRecording()
+                    }
                 }
             },
             label: {
@@ -235,9 +299,15 @@ struct CameraView: View {
                         .stroke(.white, lineWidth: 4)
                         .frame(width: 75, height: 75)
 
-                    Circle()
-                        .fill(.white)
-                        .frame(width: 65, height: 65)
+                    if selectedMediaMode == .video, viewModel.isRecording {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(.red)
+                            .frame(width: 32, height: 32)
+                    } else {
+                        Circle()
+                            .fill(selectedMediaMode == .video ? .red : .white)
+                            .frame(width: 65, height: 65)
+                    }
                 }
             }
         )
@@ -255,6 +325,7 @@ struct CameraView: View {
                     .foregroundColor(.white)
             }
         )
+        .disabled(viewModel.isRecording)
     }
 
     private var flashIcon: String {
@@ -286,5 +357,5 @@ struct CameraView: View {
 
 #Preview {
     CameraView()
-        .modelContainer(for: [CaptureSession.self, ProcessedImage.self], inMemory: true)
+        .modelContainer(for: [CaptureSession.self, ProcessedImage.self, ProcessedVideo.self], inMemory: true)
 }
