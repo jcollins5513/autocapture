@@ -22,6 +22,7 @@ struct AutoCaptureApp: App {
         let schema = Schema(
             [
                 ProcessedImage.self,
+                ProcessedVideo.self,
                 CaptureSession.self,
                 GeneratedBackground.self,
                 CompositionProject.self,

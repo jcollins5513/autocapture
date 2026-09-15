@@ -98,6 +98,9 @@ struct BatchManagerView: View {
     private func delete(at offsets: IndexSet) {
         for index in offsets {
             let session = sessions[index]
+            // Video media lives on disk, so the cascade delete has to be paired
+            // with an explicit file cleanup.
+            session.videos.forEach { $0.deleteMediaFiles() }
             modelContext.delete(session)
         }
         try? modelContext.save()

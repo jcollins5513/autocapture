@@ -16,5 +16,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [CaptureSession.self, ProcessedImage.self, GeneratedBackground.self, CompositionProject.self, CompositionLayer.self], inMemory: true)
+        .modelContainer(for: [CaptureSession.self, ProcessedImage.self, ProcessedVideo.self, GeneratedBackground.self, CompositionProject.self, CompositionLayer.self], inMemory: true)
 }
